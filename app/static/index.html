@@ -12,7 +12,7 @@
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="static/icon-192.png">
   <link rel="apple-touch-icon" href="static/icon-180.png">
-  <link rel="stylesheet" href="static/style.css?v=3">
+  <link rel="stylesheet" href="static/style.css?v=4">
 </head>
 <body>
 
@@ -34,7 +34,7 @@
 <!-- Приложение -->
 <div id="app" class="app hidden">
   <header class="topbar">
-    <div class="brand">
+    <div class="brand" data-view="day" title="На главный экран" style="cursor:pointer">
       <svg class="brand-icon"><use href="#i-truck"/></svg>
       <div>
         <div class="brand-name" id="brandName">Диспетчерская</div>
@@ -54,6 +54,7 @@
 
     <nav class="top-actions">
       <button class="btn btn-primary" id="newOrderBtn"><svg><use href="#i-plus"/></svg><span>Заказ</span></button>
+      <button class="btn btn-ghost desk-only" data-view="day"><svg><use href="#i-calendar"/></svg><span>День</span></button>
       <button class="btn btn-ghost desk-only" data-view="report"><svg><use href="#i-chart"/></svg><span>Отчёты</span></button>
       <button class="btn btn-ghost desk-only" data-view="clients"><svg><use href="#i-users"/></svg><span>Клиенты</span></button>
       <button class="btn btn-ghost desk-only" data-view="settings"><svg><use href="#i-gear"/></svg><span>Настройки</span></button>
@@ -282,6 +283,6 @@
   </defs>
 </svg>
 
-<script src="static/app.js?v=3"></script>
+<script src="static/app.js?v=4"></script>
 </body>
 </html>
