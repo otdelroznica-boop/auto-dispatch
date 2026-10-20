@@ -1,0 +1,6 @@
+# Замените адрес на свой домен или <IP-сервера>.sslip.io (например 203.0.113.10.sslip.io).
+# Caddy сам получит сертификат Let's Encrypt — нужны свободные порты 80 и 443.
+DISPATCH_HOST {
+    encode gzip
+    reverse_proxy 127.0.0.1:8090
+}
