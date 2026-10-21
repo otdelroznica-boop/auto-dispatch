@@ -268,7 +268,7 @@ svg { width: 20px; height: 20px; flex: none; }
 .kpi.ok b { color: var(--ok); }
 .kpi.bad b { color: var(--danger); }
 .panels { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-.panel { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px; min-width: 0; }
+.panel { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px; min-width: 0; overflow-x: auto; }
 .panel h4 { margin: 0 0 10px; font-size: 15px; }
 .panel.wide { grid-column: 1 / -1; }
 table.tbl { width: 100%; border-collapse: collapse; font-size: 14px; font-variant-numeric: tabular-nums; }
@@ -306,6 +306,27 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: 14px; font-varian
 .srow.off { opacity: .5; }
 .steps { margin: 0 0 12px; padding-left: 20px; color: var(--text-2); font-size: 14px; }
 .steps li { margin-bottom: 4px; }
+
+/* ---------- Автопарк ---------- */
+.fleet-banner { margin: 10px 16px 0; padding: 8px 12px; border-radius: 10px; font-size: 13px; cursor: pointer; }
+.fleet-banner.warn { background: var(--warn-soft); color: var(--warn); }
+.fleet-banner.bad { background: var(--danger-soft); color: var(--danger); }
+.fleet-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 12px; }
+.fcard { background: var(--surface); border: 1px solid var(--border); border-top: 4px solid var(--c); border-radius: var(--radius); padding: 14px; cursor: pointer; display: grid; gap: 10px; }
+.fcard:hover { border-color: var(--border-strong); border-top-color: var(--c); }
+.fcard.off { opacity: .55; }
+.fcard-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.fcard-head .plate { margin-left: auto; font-weight: 700; font-size: 13px; border: 1px solid var(--border-strong); border-radius: 6px; padding: 1px 8px; }
+.fcard-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.fcard-grid span { display: block; font-size: 11px; color: var(--text-2); text-transform: uppercase; letter-spacing: .03em; }
+.alert { padding: 6px 10px; border-radius: 8px; font-size: 13px; font-weight: 600; }
+.alert.warn { background: var(--warn-soft); color: var(--warn); }
+.alert.bad { background: var(--danger-soft); color: var(--danger); }
+.grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.vc-pane { display: grid; gap: 10px; }
+.ccard.exp { align-items: flex-start; }
+.exp-note { margin-top: 4px; font-size: 13px; color: var(--text-2); background: var(--surface-2); border-radius: 8px; padding: 6px 8px; white-space: pre-wrap; }
+.sheet.sheet-wide { max-width: 760px; }
 
 /* ---------- Окна ---------- */
 .sheet-backdrop {
@@ -439,6 +460,8 @@ input[type=number]::-webkit-inner-spin-button, input[type=number]::-webkit-outer
   .kpi { padding: 10px 12px; }
   .kpi b { font-size: 20px; }
   .panels { grid-template-columns: 1fr; }
+  .tbl { font-size: 13px; }
+  .tbl th, .tbl td { padding-left: 3px; padding-right: 3px; }
   .period-range { width: 100%; }
   .period-range input { flex: 1; min-width: 0; }
 
@@ -449,6 +472,9 @@ input[type=number]::-webkit-inner-spin-button, input[type=number]::-webkit-outer
   .row-3 { grid-template-columns: 1fr 1fr; }
   .row-3 .field:first-child { grid-column: 1 / -1; }
   .row-2 { grid-template-columns: 1fr; }
+  .grid-2 { grid-template-columns: 1fr; }
+  .fleet-banner { margin: 8px 12px 0; }
+  .fleet-list { grid-template-columns: 1fr; }
   .kind { width: 100%; }
   .kind button { flex: 1; justify-content: center; }
 

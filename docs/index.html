@@ -12,7 +12,7 @@
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="static/icon-192.png">
   <link rel="apple-touch-icon" href="static/icon-180.png">
-  <link rel="stylesheet" href="static/style.css?v=5">
+  <link rel="stylesheet" href="static/style.css?v=6">
 </head>
 <body>
 
@@ -56,6 +56,7 @@
       <button class="btn btn-primary" id="newOrderBtn"><svg><use href="#i-plus"/></svg><span>Заказ</span></button>
       <button class="btn btn-ghost btn-lost desk-only" data-lost-new title="Звонили, а взять заказ не смогли"><svg><use href="#i-x"/></svg><span>Отказ</span></button>
       <button class="btn btn-ghost desk-only" data-view="day"><svg><use href="#i-calendar"/></svg><span>День</span></button>
+      <button class="btn btn-ghost desk-only" data-view="fleet"><svg><use href="#i-truck"/></svg><span>Автопарк</span></button>
       <button class="btn btn-ghost desk-only" data-view="report"><svg><use href="#i-chart"/></svg><span>Отчёты</span></button>
       <button class="btn btn-ghost desk-only" data-view="clients"><svg><use href="#i-users"/></svg><span>Клиенты</span></button>
       <button class="btn btn-ghost desk-only" data-view="settings"><svg><use href="#i-gear"/></svg><span>Настройки</span></button>
@@ -64,6 +65,7 @@
 
   <!-- Вид: день -->
   <main id="viewDay" class="view">
+    <div class="fleet-banner hidden" id="fleetBanner"></div>
     <div class="day-toolbar">
       <div class="seg" id="vehicleTabs"></div>
       <div class="seg phone-only" id="phoneMode">
@@ -135,6 +137,17 @@
     </div>
   </main>
 
+  <!-- Вид: автопарк -->
+  <main id="viewFleet" class="view hidden">
+    <div class="page">
+      <div class="page-head">
+        <h2>Автопарк</h2>
+        <button class="btn btn-primary" id="newExpenseBtn"><svg><use href="#i-plus"/></svg><span>Расход</span></button>
+      </div>
+      <div id="fleetList" class="fleet-list"></div>
+    </div>
+  </main>
+
   <!-- Вид: настройки -->
   <main id="viewSettings" class="view hidden">
     <div class="page" id="settingsBody"></div>
@@ -145,7 +158,7 @@
     <button data-view="day" class="active"><svg><use href="#i-calendar"/></svg><span>День</span></button>
     <button data-view="report"><svg><use href="#i-chart"/></svg><span>Отчёты</span></button>
     <button class="fab" id="fabNew" aria-label="Новый заказ"><svg><use href="#i-plus"/></svg></button>
-    <button data-view="clients"><svg><use href="#i-users"/></svg><span>Клиенты</span></button>
+    <button data-view="fleet"><svg><use href="#i-truck"/></svg><span>Парк</span></button>
     <button data-view="settings"><svg><use href="#i-gear"/></svg><span>Ещё</span></button>
   </nav>
 </div>
@@ -286,6 +299,6 @@
 </svg>
 
 <script src="static/demo-api.js"></script>
-<script src="static/app.js?v=5"></script>
+<script src="static/app.js?v=6"></script>
 </body>
 </html>

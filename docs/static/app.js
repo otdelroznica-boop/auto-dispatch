@@ -145,7 +145,7 @@ async function pinKey(k) {
 /* ================= Старт ================= */
 async function start() {
   const b = await api('/api/bootstrap');
-  Object.assign(S, { me: b.me, vehicles: b.vehicles, drivers: b.drivers, services: b.services, reasons: b.reasons || [], settings: b.settings });
+  Object.assign(S, { me: b.me, vehicles: b.vehicles, drivers: b.drivers, services: b.services, reasons: b.reasons || [], types: b.types || [], expCats: b.expense_categories || [], settings: b.settings });
   if (S.veh !== 'all' && !S.vehicles.some(v => v.id === +S.veh && v.active)) S.veh = 'all';
   $('#brandName').textContent = S.settings.company_name || 'Диспетчерская';
   $('#loginTitle').textContent = S.settings.company_name || 'Диспетчерская';
@@ -163,7 +163,7 @@ function vehicleById(id) { return S.vehicles.find(v => v.id === +id); }
 /* ================= Навигация ================= */
 function setView(view) {
   S.view = view;
-  const map = { day: '#viewDay', report: '#viewReport', clients: '#viewClients', settings: '#viewSettings' };
+  const map = { day: '#viewDay', report: '#viewReport', clients: '#viewClients', settings: '#viewSettings', fleet: '#viewFleet' };
   Object.entries(map).forEach(([k, sel]) => $(sel).classList.toggle('hidden', k !== view));
   $$('[data-view]').forEach(b => b.classList.toggle('active', b.dataset.view === view));
   $('.datebar').style.visibility = view === 'day' ? '' : 'hidden';
@@ -171,6 +171,8 @@ function setView(view) {
   if (view === 'report') loadReport();
   if (view === 'clients') loadClients();
   if (view === 'settings') renderSettings();
+  if (view === 'fleet') loadFleet();
+  setDialogWide(false);
   if (view === 'day') renderDay();
   window.scrollTo(0, 0);
 }
@@ -184,6 +186,7 @@ function initNav() {
   $('#newOrderBtn').onclick = () => openOrder(null, {});
   $('#fabNew').onclick = () => openOrder(null, {});
   $$('[data-lost-new]').forEach(b => b.onclick = () => openLost(null));
+  $('#newExpenseBtn').onclick = () => openExpense(null);
   $('#searchInput').oninput = e => { S.search = e.target.value.trim().toLowerCase(); renderDay(); };
   $$('#statusTabs button').forEach(b => b.onclick = () => {
     S.status = b.dataset.status;
@@ -263,6 +266,7 @@ function renderDay() {
 
   renderList();
   renderTimeline();
+  renderFleetBanner();
   topbarHeight();
 }
 
@@ -288,14 +292,14 @@ function orderCard(o) {
 }
 
 function dayLost() {
-  const ids = new Set(visibleVehicles().map(v => v.id));
-  return (S.lost || []).filter(l => S.veh === 'all' || ids.has(l.vehicle_id));
+  const types = new Set(visibleVehicles().map(v => v.type_id));
+  return (S.lost || []).filter(l => S.veh === 'all' || types.has(l.type_id));
 }
 
 function lostCard(l) {
   return `<div class="ocard lost" data-lost="${l.id}" style="--c:var(--warn)">
     <div class="ocard-top">Отказ${l.time ? ' ' + l.time : ''}
-      ${l.vehicle_name ? `<span class="veh" style="display:inline-flex"><i class="dot" style="background:${esc(l.vehicle_color)}"></i>${esc(l.vehicle_name)}</span>` : ''}
+      ${l.type_name || l.vehicle_name ? `<span class="veh" style="display:inline-flex">${esc(l.type_name || l.vehicle_name)}</span>` : ''}
       <span class="badge ${l.partner ? 'b-paid' : 'b-work'}">${l.partner ? 'партнёру' : 'упущен'}</span></div>
     <div class="ocard-line"><span>${esc(l.reason_title || 'Причина не указана')}</span></div>
     ${l.lines.length ? `<div class="ocard-line"><span>${esc(l.lines.map(x => x.title).join(', '))}</span></div>` : ''}
@@ -467,7 +471,7 @@ function openDialog(title, body, buttons = []) {
   });
   $('#dialog').classList.remove('hidden');
 }
-function closeDialog() { $('#dialog').classList.add('hidden'); }
+function closeDialog() { $('#dialog').classList.add('hidden'); setDialogWide(false); }
 
 /* ================= Форма заказа ================= */
 function timeOptions() {
@@ -606,8 +610,9 @@ function renderOfDuration() {
   if (changed) renderOfLines();
 }
 
-function servicesFor(vehId) {
-  return S.services.filter(s => s.active && (s.vehicle_id === null || s.vehicle_id === vehId));
+function servicesFor(vehId) { return servicesForType(vehicleById(vehId)?.type_id); }
+function servicesForType(typeId) {
+  return S.services.filter(s => s.active && (s.type_id === null || s.type_id === typeId));
 }
 
 function renderOfServices() {
@@ -667,13 +672,25 @@ async function checkConflict() {
     box.textContent = 'Время окончания должно быть позже начала';
     box.classList.remove('hidden');
   } else if (c) {
+    const typeId = vehicleById(F.vehicle_id)?.type_id;
+    const free = activeVehicles().filter(v => v.id !== F.vehicle_id && v.type_id === typeId && !list.some(o => o.vehicle_id === v.id
+      && o.id !== F.id && o.status !== 'cancel' && toMin(o.start_time) < e && toMin(o.end_time) > s));
     box.innerHTML = `<div>Машина в это время занята: ${c.start_time}–${c.end_time}, ${esc(c.client_name || 'без имени')}</div>
-      ${F.id ? '' : '<button type="button" class="btn btn-sm btn-ghost" id="ofToLost" style="margin-top:8px">Записать как отказ</button>'}`;
+      ${free.length ? `<div style="margin-top:6px">Свободна: ${free.map(v => esc(v.name)).join(', ')}</div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">${free.map(v => `<button type="button" class="btn btn-sm btn-ghost" data-switch="${v.id}">Записать на «${esc(v.name)}»</button>`).join('')}</div>`
+      : `${typeId ? `<div style="margin-top:6px">Все машины вида «${esc(typeName(typeId))}» в это время заняты.</div>` : ''}
+        ${F.id ? '' : '<button type="button" class="btn btn-sm btn-ghost" id="ofToLost" style="margin-top:8px">Записать как отказ</button>'}`}`;
     box.classList.remove('hidden');
+    $$('[data-switch]', box).forEach(btn => btn.onclick = () => {
+      const prev = vehicleById(F.vehicle_id);
+      F.vehicle_id = +btn.dataset.switch;
+      if (!F.driver_id || F.driver_id === prev?.default_driver_id) F.driver_id = vehicleById(F.vehicle_id).default_driver_id;
+      renderOfVehicle(); renderOfDrivers(); renderOfServices(); checkConflict();
+    });
     const b = $('#ofToLost');
     if (b) b.onclick = () => {
       $('#orderSheet').classList.add('hidden');
-      openLost(null, { vehicle_id: F.vehicle_id, date: F.date, lines: F.lines.map(l => ({ ...l })), client_phone: F.client.phone,
+      openLost(null, { type_id: typeId, date: F.date, lines: F.lines.map(l => ({ ...l })), client_phone: F.client.phone,
         note: [F.client.name, $('#ofFrom').value.trim(), $('#ofNote').value.trim()].filter(Boolean).join(', '),
         reason_id: S.reasons.find(r => r.active && /занят/i.test(r.title))?.id ?? null });
     };
@@ -882,6 +899,7 @@ async function loadReport() {
         ${r.by_service.map(s => `<tr><td>${esc(s.name)}</td><td class="r">${+s.qty.toFixed(2)}</td><td class="r">${money(s.amount)}</td></tr>`).join('')}</table>` : '<div class="muted">Нет данных</div>'}</div>
       <div class="panel"><h4>По способу оплаты</h4>${groupTable(r.by_payment, 'Оплата')}</div>
       ${hiredPanel(r)}
+      ${expensesPanel(r)}
       <div class="panel wide" id="lostPanel"></div>
       <div class="panel wide"><h4>Выполнены, но оплачены не полностью</h4>${r.debts.length ? `<table class="tbl"><tr><th>Дата</th><th>Клиент</th><th>Машина</th><th class="r">Долг</th></tr>
         ${r.debts.map(o => `<tr class="click" data-id="${o.id}"><td>${dateRu(o.date, false)}</td><td>${esc(o.client_name || 'Без имени')} ${esc(o.client_phone || '')}</td><td>${esc(o.vehicle_name)}</td><td class="r"><b>${money(o.plan_amount - o.paid_amount)}</b></td></tr>`).join('')}</table>` : '<div class="muted">Долгов нет</div>'}</div>
@@ -889,6 +907,8 @@ async function loadReport() {
   $$('#reportBody tr.click').forEach(tr => tr.onclick = () => openOrder(+tr.dataset.id));
   S.report.data = r;
   renderLostReport();
+  $('#repAddExp').onclick = () => openExpense(null, null, loadReport);
+  $$('#reportBody [data-exp]').forEach(row => row.onclick = () => openExpense((r.expenses || []).find(e => e.id === +row.dataset.exp), null, loadReport));
 }
 
 function hiredPanel(r) {
@@ -913,7 +933,7 @@ function renderLostReport() {
   if (!box) return;
   const all = S.report.data.lost || [];
   const fv = S.report.lostVeh || '', fs = S.report.lostSrv || '';
-  const items = all.filter(l => (!fv || String(l.vehicle_id) === fv) && (!fs || l.lines.some(x => x.title === fs)));
+  const items = all.filter(l => (!fv || String(l.type_id) === fv) && (!fs || l.lines.some(x => x.title === fs)));
   const sum = items.reduce((s, l) => s + l.amount, 0);
   const given = items.filter(l => l.partner), income = given.reduce((s, l) => s + (l.partner_income || 0), 0);
   const grp = (keyFn) => {
@@ -924,18 +944,18 @@ function renderLostReport() {
     }));
     return [...m.values()].sort((a, b) => b.amount - a.amount);
   };
-  const byVeh = grp(l => [[l.vehicle_name || 'Не указана', l.amount]]);
+  const byVeh = grp(l => [[l.type_name || l.vehicle_name || 'Не указан', l.amount]]);
   const bySrv = grp(l => l.lines.length ? l.lines.map(x => [x.title, x.qty * x.price]) : [['Без услуги', l.amount]]);
   const byRsn = grp(l => [[l.reason_title || 'Не указана', l.amount]]);
   const tbl = (rows, title) => rows.length ? `<table class="tbl"><tr><th>${title}</th><th class="r">Отказов</th><th class="r">Упущено</th></tr>
     ${rows.map(g => `<tr><td>${esc(g.name)}<div class="bar" style="background:var(--warn);width:${sum ? Math.max(2, g.amount / sum * 100) : 0}%"></div></td><td class="r">${g.count}</td><td class="r"><b>${money(g.amount)}</b></td></tr>`).join('')}</table>`
     : '<div class="muted">Нет данных</div>';
-  const vehOpts = [...new Map(all.filter(l => l.vehicle_id).map(l => [l.vehicle_id, l.vehicle_name])).entries()];
+  const vehOpts = [...new Map(all.filter(l => l.type_id).map(l => [l.type_id, l.type_name])).entries()];
   const srvOpts = [...new Set(all.flatMap(l => l.lines.map(x => x.title)))];
   const sel = 'style="height:36px;border-radius:8px;border:1px solid var(--border);background:var(--surface);padding:0 8px;max-width:100%"';
   box.innerHTML = `<div class="page-head" style="margin-bottom:8px;flex-wrap:wrap"><h4 style="margin:0">Упущенная прибыль (отказы)</h4>
       <div style="display:flex;gap:6px;flex-wrap:wrap">
-        <select id="lfVeh" ${sel}><option value="">Все машины</option>${vehOpts.map(([id, n]) => `<option value="${id}" ${String(id) === fv ? 'selected' : ''}>${esc(n)}</option>`).join('')}</select>
+        <select id="lfVeh" ${sel}><option value="">Вся техника</option>${vehOpts.map(([id, n]) => `<option value="${id}" ${String(id) === fv ? 'selected' : ''}>${esc(n)}</option>`).join('')}</select>
         <select id="lfSrv" ${sel}><option value="">Все услуги</option>${srvOpts.map(t => `<option ${t === fs ? 'selected' : ''}>${esc(t)}</option>`).join('')}</select>
       </div></div>
     <div class="kpis" style="margin-bottom:12px">
@@ -945,11 +965,11 @@ function renderLostReport() {
       <div class="kpi ok"><span>Получили с передачи</span><b>${money(income)}</b></div>
     </div>
     ${items.length ? `<div class="panels">
-      <div><h4>По машинам</h4>${tbl(byVeh, 'Машина')}</div>
+      <div><h4>По виду техники</h4>${tbl(byVeh, 'Вид')}</div>
       <div><h4>По услугам</h4>${tbl(bySrv, 'Услуга')}</div>
       <div><h4>По причинам</h4>${tbl(byRsn, 'Причина')}</div>
-      <div><h4>Список</h4><table class="tbl"><tr><th>Дата</th><th>Машина</th><th>Причина</th><th class="r">Сумма</th></tr>
-        ${items.slice().reverse().map(l => `<tr class="click" data-lostid="${l.id}"><td>${dateRu(l.date, false)}</td><td>${esc(l.vehicle_name || '—')}</td><td>${esc(l.reason_title || '—')}${l.partner ? ' <span class="badge b-paid">партнёру</span>' : ''}</td><td class="r">${money(l.amount)}</td></tr>`).join('')}</table></div>
+      <div><h4>Список</h4><table class="tbl"><tr><th>Дата</th><th>Техника</th><th>Причина</th><th class="r">Сумма</th></tr>
+        ${items.slice().reverse().map(l => `<tr class="click" data-lostid="${l.id}"><td>${dateRu(l.date, false)}</td><td>${esc(l.type_name || l.vehicle_name || '—')}</td><td>${esc(l.reason_title || '—')}${l.partner ? ' <span class="badge b-paid">партнёру</span>' : ''}</td><td class="r">${money(l.amount)}</td></tr>`).join('')}</table></div>
     </div>` : '<div class="muted">Отказов за период нет. Отказ записывается кнопкой «Отказ» на главном экране.</div>'}`;
   $('#lfVeh').onchange = e => { S.report.lostVeh = e.target.value; renderLostReport(); };
   $('#lfSrv').onchange = e => { S.report.lostSrv = e.target.value; renderLostReport(); };
@@ -961,13 +981,14 @@ function openLost(item, preset = null, after = loadDay) {
   const nowT = new Date();
   const L = item ? { ...item, lines: item.lines.map(x => ({ ...x })) } : {
     id: null, date: S.date, time: `${String(nowT.getHours()).padStart(2, '0')}:${String(nowT.getMinutes()).padStart(2, '0')}`,
-    vehicle_id: S.veh !== 'all' ? +S.veh : activeVehicles()[0]?.id, reason_id: null, lines: [], amount: 0,
+    type_id: S.veh !== 'all' ? vehicleById(S.veh)?.type_id : activeTypes()[0]?.id, reason_id: null, lines: [], amount: 0,
     client_phone: '', note: '', partner: 0, partner_name: '', partner_income: 0, ...(preset || {}),
   };
   const reasons = S.reasons.filter(r => r.active || r.id === L.reason_id);
   openDialog(item ? 'Отказ' : 'Отказ: не смогли взять заказ', `
     <div class="muted" style="font-size:13px">Звонил клиент, а взять заказ не смогли. Сумма попадёт в отчёт «Упущенная прибыль».</div>
-    <div class="seg seg-full" id="lsVeh">${activeVehicles().map(v => `<button data-id="${v.id}"><i class="dot" style="background:${esc(v.color)}"></i>${esc(v.name)}</button>`).join('')}</div>
+    <div class="block-title">Что нужно было клиенту</div>
+    <div class="seg seg-full" id="lsVeh">${activeTypes().map(t => `<button data-id="${t.id}">${esc(t.name)}</button>`).join('')}</div>
     <div class="row-2" style="grid-template-columns:1fr 1fr"><label class="field"><span>На какой день просили</span><input type="date" id="lsDate" value="${L.date}"></label>
       <label class="field"><span>Время звонка</span><input type="time" id="lsTime" value="${esc(L.time)}"></label></div>
     <div class="block-title">Причина</div>
@@ -988,17 +1009,17 @@ function openLost(item, preset = null, after = loadDay) {
       await api('/api/lost/' + item.id, { method: 'DELETE' }); closeDialog(); toast('Отказ удалён'); await after();
     } }] : []),
     { text: 'Сохранить', primary: true, onClick: async () => {
-      if (!L.vehicle_id) throw new Error('Выберите машину');
+      if (!L.type_id) throw new Error('Выберите вид техники');
       if (!L.reason_id) throw new Error('Выберите причину');
       if (!L.lines.length && !(+$('#lsAmount').value)) throw new Error('Выберите услугу или укажите сумму');
       await api(item ? '/api/lost/' + item.id : '/api/lost', { method: item ? 'PUT' : 'POST', body: {
-        date: $('#lsDate').value || S.date, time: $('#lsTime').value, vehicle_id: L.vehicle_id, reason_id: L.reason_id,
+        date: $('#lsDate').value || S.date, time: $('#lsTime').value, type_id: L.type_id, reason_id: L.reason_id,
         lines: L.lines, amount: +$('#lsAmount').value || 0, client_phone: $('#lsPhone').value.trim(), note: $('#lsNote').value.trim(),
         partner: $('#lsPartner').checked, partner_name: $('#lsPartnerName').value.trim(), partner_income: +$('#lsIncome').value || 0 } });
       closeDialog(); toast('Отказ записан'); await after();
     } }]);
 
-  const renderVeh = () => $$('#lsVeh button').forEach(b => b.classList.toggle('active', +b.dataset.id === L.vehicle_id));
+  const renderVeh = () => $$('#lsVeh button').forEach(b => b.classList.toggle('active', +b.dataset.id === L.type_id));
   const renderReason = () => $$('#lsReason button').forEach(b => b.classList.toggle('active', +b.dataset.id === L.reason_id));
   const recalc = () => {
     const amt = $('#lsAmount');
@@ -1019,7 +1040,7 @@ function openLost(item, preset = null, after = loadDay) {
     recalc();
   };
   const renderChips = () => {
-    $('#lsChips').innerHTML = servicesFor(L.vehicle_id).map(sv => `<button type="button" data-id="${sv.id}" class="${L.lines.some(x => x.service_id === sv.id) ? 'active' : ''}">${esc(sv.title)}<small>${money(sv.price)}</small></button>`).join('');
+    $('#lsChips').innerHTML = servicesForType(L.type_id).map(sv => `<button type="button" data-id="${sv.id}" class="${L.lines.some(x => x.service_id === sv.id) ? 'active' : ''}">${esc(sv.title)}<small>${money(sv.price)}</small></button>`).join('');
     $$('#lsChips button').forEach(b => b.onclick = () => {
       const sv = S.services.find(x => x.id === +b.dataset.id);
       const ex = L.lines.find(x => x.service_id === sv.id);
@@ -1027,7 +1048,7 @@ function openLost(item, preset = null, after = loadDay) {
       renderLines(); renderChips();
     });
   };
-  $$('#lsVeh button').forEach(b => b.onclick = () => { L.vehicle_id = +b.dataset.id; renderVeh(); renderChips(); });
+  $$('#lsVeh button').forEach(b => b.onclick = () => { L.type_id = +b.dataset.id; renderVeh(); renderChips(); });
   $$('#lsReason button').forEach(b => b.onclick = () => { L.reason_id = +b.dataset.id; renderReason(); });
   $('#lsPartner').onchange = e => $('#lsPartnerBox').classList.toggle('hidden', !e.target.checked);
   $('#lsPhone').oninput = e => { e.target.value = digits(e.target.value) ? formatPhone(e.target.value) : ''; };
@@ -1087,18 +1108,19 @@ async function editClient(id) {
 /* ================= Настройки ================= */
 async function reloadRefs() {
   const b = await api('/api/bootstrap');
-  Object.assign(S, { vehicles: b.vehicles, drivers: b.drivers, services: b.services, reasons: b.reasons || [], settings: b.settings });
+  Object.assign(S, { vehicles: b.vehicles, drivers: b.drivers, services: b.services, reasons: b.reasons || [], types: b.types || [], expCats: b.expense_categories || [], settings: b.settings });
 }
 
 function renderSettings() {
   const admin = S.me.is_admin;
-  const vehName = id => id ? (vehicleById(id)?.name || '—') : 'Любая машина';
+  const vehName = typeName;
   $('#settingsBody').innerHTML = `
     <div class="page-head"><h2>Настройки</h2><button class="btn btn-ghost" id="logoutBtn">Выйти (${esc(S.me.name)})</button></div>
+    <button class="btn btn-ghost btn-block phone-only" id="goClients" style="margin-bottom:12px">${icon('users')}<span>Клиенты</span></button>
 
     <div class="settings-section"><h4>Машины</h4><p>Колонки на шкале. Водитель по умолчанию подставляется в новый заказ.</p>
       ${S.vehicles.map(v => `<div class="srow ${v.active ? '' : 'off'}" data-veh="${v.id}"><i class="dot" style="background:${esc(v.color)}"></i>
-        <div class="main"><b>${esc(v.name)}</b><small>${[v.plate, S.drivers.find(d => d.id === v.default_driver_id)?.name,
+        <div class="main"><b>${esc(v.name)}</b><small>${[typeName(v.type_id), v.plate, S.drivers.find(d => d.id === v.default_driver_id)?.name,
           v.ownership === 'hired' ? `наёмная${v.owner_name ? ', ' + v.owner_name : ''}, владельцу ${+v.owner_share || 0}%` : ''].filter(Boolean).map(esc).join(' · ')}</small></div>${icon('right')}</div>`).join('')}
       <button class="link-btn" id="addVeh">+ Машина</button></div>
 
@@ -1107,13 +1129,22 @@ function renderSettings() {
         <div class="main"><b>${esc(d.name)}</b><small>${esc(d.phone)}${d.tg_chat_id ? ' · Telegram подключён' : ''}</small></div>${icon('right')}</div>`).join('')}
       <button class="link-btn" id="addDrv">+ Водитель</button></div>
 
+    <div class="settings-section"><h4>Виды техники</h4><p>Клиенту нужен вид техники, а не конкретная машина. По виду считаются отказы и подбирается прайс.</p>
+      ${S.types.map(t => `<div class="srow ${t.active ? '' : 'off'}" data-type="${t.id}"><div class="main"><b>${esc(t.name)}</b>
+        <small>${S.vehicles.filter(v => v.type_id === t.id && v.active).map(v => v.name).join(', ') || 'нет машин'}</small></div>${icon('right')}</div>`).join('')}
+      <button class="link-btn" id="addType">+ Вид техники</button></div>
+
+    <div class="settings-section"><h4>Статьи расходов</h4><p>Для учёта расходов в разделе «Автопарк».</p>
+      ${S.expCats.map(c => `<div class="srow ${c.active ? '' : 'off'}" data-ecat="${c.id}"><div class="main"><b>${esc(c.title)}</b></div>${icon('right')}</div>`).join('')}
+      <button class="link-btn" id="addEcat">+ Статья</button></div>
+
     <div class="settings-section"><h4>Причины отказа</h4><p>Список для кнопки «Отказ». По причинам строится отчёт по упущенной прибыли.</p>
       ${S.reasons.map(r => `<div class="srow ${r.active ? '' : 'off'}" data-rsn="${r.id}"><div class="main"><b>${esc(r.title)}</b></div>${icon('right')}</div>`).join('')}
       <button class="link-btn" id="addRsn">+ Причина</button></div>
 
     <div class="settings-section"><h4>Прайс услуг</h4><p>Кнопки услуг в заказе. Цену в заказе можно поменять.</p>
       ${S.services.map(s => `<div class="srow ${s.active ? '' : 'off'}" data-srv="${s.id}">
-        <div class="main"><b>${esc(s.title)}</b><small>${esc(vehName(s.vehicle_id))}</small></div><b>${money(s.price)}${s.unit !== 'шт' ? '/' + esc(s.unit) : ''}</b>${icon('right')}</div>`).join('')}
+        <div class="main"><b>${esc(s.title)}</b><small>${esc(vehName(s.type_id))}</small></div><b>${money(s.price)}${s.unit !== 'шт' ? '/' + esc(s.unit) : ''}</b>${icon('right')}</div>`).join('')}
       <button class="link-btn" id="addSrv">+ Услуга</button></div>
 
     ${admin ? `
@@ -1163,6 +1194,11 @@ function renderSettings() {
   $('#addSrv').onclick = () => editService(null);
   $$('[data-rsn]').forEach(r => r.onclick = () => editReason(+r.dataset.rsn));
   $('#addRsn').onclick = () => editReason(null);
+  $$('[data-type]').forEach(r => r.onclick = () => editType(+r.dataset.type));
+  $('#addType').onclick = () => editType(null);
+  $$('[data-ecat]').forEach(r => r.onclick = () => editExpCat(+r.dataset.ecat));
+  $('#addEcat').onclick = () => editExpCat(null);
+  $('#goClients').onclick = () => setView('clients');
   if (admin) {
     $('#tgSave').onclick = async () => {
       const body = { tg_dispatch_chat: $('#tgDispatch').value.trim() };
@@ -1223,6 +1259,26 @@ function editEntity(title, fields, url, id, build) {
   } }]);
 }
 
+function editType(id) {
+  const t = id ? S.types.find(x => x.id === id) : { name: '', sort: S.types.length + 1, active: 1 };
+  editEntity(id ? 'Вид техники' : 'Новый вид техники', [
+    { key: 'name', label: 'Название', value: t.name, attrs: 'placeholder="Например: Манипулятор"' },
+    { key: 'sort', label: 'Порядок', type: 'number', value: t.sort },
+    { key: 'active', label: 'Используется', type: 'check', value: t.active },
+  ], '/api/types', id, () => ({ name: ff('name').trim(), sort: +ff('sort') || 0, active: ff('active') }));
+}
+
+function editExpCat(id) {
+  const c = id ? S.expCats.find(x => x.id === id) : { title: '', sort: S.expCats.length + 1, active: 1 };
+  editEntity(id ? 'Статья расходов' : 'Новая статья', [
+    { key: 'title', label: 'Статья', value: c.title },
+    { key: 'sort', label: 'Порядок', type: 'number', value: c.sort },
+    { key: 'active', label: 'Показывать', type: 'check', value: c.active },
+  ], '/api/expense-categories', id, () => ({ title: ff('title').trim(), sort: +ff('sort') || 0, active: ff('active') }));
+}
+
+function activeTypes() { return S.types.filter(t => t.active); }
+
 function editReason(id) {
   const r = id ? S.reasons.find(x => x.id === id) : { title: '', sort: S.reasons.length + 1, active: 1 };
   editEntity(id ? 'Причина отказа' : 'Новая причина', [
@@ -1236,6 +1292,7 @@ function editVehicle(id) {
   const v = id ? vehicleById(id) : { name: '', plate: '', color: '#16a34a', default_driver_id: null, sort: S.vehicles.length + 1, active: 1, ownership: 'own', owner_name: '', owner_share: 0 };
   editEntity(id ? 'Машина' : 'Новая машина', [
     { key: 'name', label: 'Название', value: v.name },
+    { key: 'type', label: 'Вид техники', type: 'select', value: v.type_id ?? '', options: [['', 'Не указан'], ...S.types.map(t => [t.id, t.name])] },
     { key: 'plate', label: 'Госномер', value: v.plate },
     { key: 'color', label: 'Цвет', type: 'color', value: v.color, attrs: 'style="height:44px;padding:4px"' },
     { key: 'driver', label: 'Водитель по умолчанию', type: 'select', value: v.default_driver_id ?? '', options: [['', 'Не указан'], ...S.drivers.map(d => [d.id, d.name])] },
@@ -1244,7 +1301,7 @@ function editVehicle(id) {
     { key: 'own', label: 'Чья машина', type: 'select', value: v.ownership || 'own', options: [['own', 'Своя'], ['hired', 'Наёмная (отдаём владельцу часть)']] },
     { key: 'owner', label: 'Владелец наёмной машины', value: v.owner_name || '' },
     { key: 'share', label: 'Отдаём владельцу, % от «Взяли»', type: 'number', value: v.owner_share || 0, attrs: 'min="0" max="100" inputmode="decimal"' },
-  ], '/api/vehicles', id, () => ({ name: ff('name'), plate: ff('plate'), color: ff('color'), default_driver_id: ff('driver') ? +ff('driver') : null, sort: +ff('sort') || 0, active: ff('active'),
+  ], '/api/vehicles', id, () => ({ name: ff('name'), type_id: ff('type') ? +ff('type') : null, plate: ff('plate'), color: ff('color'), default_driver_id: ff('driver') ? +ff('driver') : null, sort: +ff('sort') || 0, active: ff('active'),
     ownership: ff('own'), owner_name: ff('own') === 'hired' ? ff('owner').trim() : '', owner_share: ff('own') === 'hired' ? Math.min(100, Math.max(0, +ff('share') || 0)) : 0 }));
   const toggle = () => ['owner', 'share'].forEach(k => $('#ff_' + k).closest('.field').classList.toggle('hidden', $('#ff_own').value !== 'hired'));
   $('#ff_own').onchange = toggle;
@@ -1262,14 +1319,14 @@ function editDriver(id) {
 }
 
 function editService(id) {
-  const s = id ? S.services.find(x => x.id === id) : { title: '', price: 0, unit: 'шт', vehicle_id: null, active: 1 };
+  const s = id ? S.services.find(x => x.id === id) : { title: '', price: 0, unit: 'шт', type_id: null, active: 1 };
   editEntity(id ? 'Услуга' : 'Новая услуга', [
     { key: 'title', label: 'Название', value: s.title },
     { key: 'price', label: 'Цена, ₽', type: 'number', value: s.price, attrs: 'inputmode="decimal"' },
     { key: 'unit', label: 'Единица', type: 'select', value: s.unit, options: [['шт', 'за выезд / штука'], ['ч', 'за час'], ['км', 'за км']] },
-    { key: 'veh', label: 'Для машины', type: 'select', value: s.vehicle_id ?? '', options: [['', 'Любая машина'], ...S.vehicles.map(v => [v.id, v.name])] },
+    { key: 'veh', label: 'Для вида техники', type: 'select', value: s.type_id ?? '', options: [['', 'Любая техника'], ...S.types.map(t => [t.id, t.name])] },
     { key: 'active', label: 'Показывать в заказе', type: 'check', value: s.active },
-  ], '/api/services', id, () => ({ title: ff('title'), price: +ff('price') || 0, unit: ff('unit'), vehicle_id: ff('veh') ? +ff('veh') : null, active: ff('active') }));
+  ], '/api/services', id, () => ({ title: ff('title'), price: +ff('price') || 0, unit: ff('unit'), type_id: ff('veh') ? +ff('veh') : null, active: ff('active') }));
 }
 
 async function loadUsers() {
@@ -1292,6 +1349,285 @@ function editUser(id) {
       body: { name: ff('name').trim(), pin: ff('pin') || null, is_admin: !!ff('admin'), active: !!ff('active') } });
     closeDialog(); toast('Сохранено'); loadUsers();
   } }]);
+}
+
+/* ================= Автопарк ================= */
+function typeName(id) { return id ? (S.types.find(t => t.id === id)?.name || '—') : 'Любая техника'; }
+function daysTo(dateStr) {
+  if (!dateStr) return null;
+  return Math.round((parseDate(dateStr) - parseDate(isoDate(new Date()))) / 86400000);
+}
+
+// Напоминания по машине: ОСАГО, техосмотр, ТО по пробегу
+function vehicleAlerts(v) {
+  const out = [];
+  const dateCheck = (d, what) => {
+    const n = daysTo(d);
+    if (n === null) return;
+    if (n < 0) out.push({ level: 'bad', text: `${what} просрочен${what === 'ОСАГО' ? 'о' : ''} с ${dateRu(d, false)}` });
+    else if (n <= 30) out.push({ level: 'warn', text: `${what}: осталось ${n} дн. (до ${dateRu(d, false)})` });
+  };
+  dateCheck(v.osago_until, 'ОСАГО');
+  dateCheck(v.inspection_until, 'Техосмотр');
+  if (v.service_every_km > 0 && v.mileage > 0) {
+    const left = (v.last_service_km || 0) + v.service_every_km - v.mileage;
+    if (left <= 0) out.push({ level: 'bad', text: left === 0 ? 'Пора делать ТО' : `ТО просрочено на ${(-left).toLocaleString('ru-RU')} км` });
+    else if (left <= 1000) out.push({ level: 'warn', text: `ТО через ${left.toLocaleString('ru-RU')} км` });
+  }
+  return out;
+}
+function fleetAlerts() {
+  return activeVehicles().flatMap(v => vehicleAlerts(v).map(a => ({ ...a, vehicle: v })))
+    .sort((a, b) => (b.level === 'bad') - (a.level === 'bad'));
+}
+
+function renderFleetBanner() {
+  const box = $('#fleetBanner');
+  if (!box) return;
+  const al = fleetAlerts();
+  box.classList.toggle('hidden', !al.length);
+  if (!al.length) return;
+  const bad = al.some(a => a.level === 'bad');
+  box.className = 'fleet-banner ' + (bad ? 'bad' : 'warn');
+  box.innerHTML = `<b>Автопарк:</b> ${al.slice(0, 2).map(a => `${esc(a.vehicle.name)} — ${esc(a.text)}`).join('; ')}${al.length > 2 ? ` и ещё ${al.length - 2}` : ''}
+    <span class="link-btn" style="padding:0;margin-left:6px">Открыть</span>`;
+  box.onclick = () => setView('fleet');
+}
+
+async function loadFleet() {
+  const today = isoDate(new Date());
+  const monthStart = today.slice(0, 8) + '01';
+  const exp = await api(`/api/expenses?date_from=${monthStart}&date_to=${today}`);
+  const sumBy = id => exp.filter(e => e.vehicle_id === id).reduce((s, e) => s + e.amount, 0);
+  const list = S.vehicles.slice().sort((a, b) => b.active - a.active || a.sort - b.sort);
+  $('#fleetList').innerHTML = list.map(v => {
+    const al = vehicleAlerts(v);
+    return `<div class="fcard ${v.active ? '' : 'off'}" data-fleet="${v.id}" style="--c:${esc(v.color)}">
+      <div class="fcard-head"><i class="dot" style="background:${esc(v.color)}"></i><b>${esc(v.name)}</b>
+        <span class="muted">${esc(typeName(v.type_id))}${v.ownership === 'hired' ? ', наёмная' : ''}</span>
+        <span class="plate">${esc(v.plate || 'без номера')}</span></div>
+      ${v.brand || v.year ? `<div class="muted" style="font-size:13px;margin-top:-4px">${esc([v.brand, v.year ? v.year + ' г.' : ''].filter(Boolean).join(', '))}</div>` : ''}
+      <div class="fcard-grid">
+        <div><span>Пробег</span><b>${v.mileage ? v.mileage.toLocaleString('ru-RU') + ' км' : '—'}</b></div>
+        <div><span>ОСАГО до</span><b>${v.osago_until ? dateRu(v.osago_until, false) : '—'}</b></div>
+        <div><span>Техосмотр до</span><b>${v.inspection_until ? dateRu(v.inspection_until, false) : '—'}</b></div>
+        <div><span>Расходы за месяц</span><b>${money(sumBy(v.id))}</b></div>
+      </div>
+      ${al.map(a => `<div class="alert ${a.level}">${esc(a.text)}</div>`).join('')}
+    </div>`;
+  }).join('') || '<div class="empty"><b>Машин нет</b>Добавьте машину в Настройках.</div>';
+  $$('#fleetList [data-fleet]').forEach(c => c.onclick = () => openVehicleCard(+c.dataset.fleet));
+}
+
+function setDialogWide(on) { $('#dialog .sheet').classList.toggle('sheet-wide', on); }
+
+async function openVehicleCard(id, tab = 'data') {
+  const v = vehicleById(id);
+  const [docs, exps] = await Promise.all([api(`/api/vehicles/${id}/docs`), api(`/api/expenses?vehicle_id=${id}`)]);
+  const total = exps.reduce((s, e) => s + e.amount, 0);
+  const al = vehicleAlerts(v);
+  const field = (key, label, type = 'text', attrs = '') =>
+    `<label class="field"><span>${label}</span><input type="${type}" id="vc_${key}" value="${esc(v[key] ?? '')}" ${attrs}></label>`;
+  setDialogWide(true);
+  openDialog(`${v.name}${v.plate ? ', ' + v.plate : ''}`, `
+    ${al.map(a => `<div class="alert ${a.level}">${esc(a.text)}</div>`).join('')}
+    <div class="seg seg-full" id="vcTabs"><button data-tab="data">Данные</button><button data-tab="docs">Документы (${docs.length})</button><button data-tab="exp">Расходы (${exps.length})</button></div>
+
+    <div data-pane="data" class="vc-pane">
+      <div class="grid-2">
+        ${field('brand', 'Марка, модель')}
+        ${field('year', 'Год выпуска', 'number', 'inputmode="numeric"')}
+        ${field('plate', 'Госномер')}
+        ${field('vin', 'VIN')}
+        ${field('pts', 'ПТС, номер')}
+        ${field('sts', 'СТС, номер')}
+        ${field('mileage', 'Пробег сейчас, км', 'number', 'inputmode="numeric"')}
+        ${field('osago_until', 'ОСАГО действует до', 'date')}
+        ${field('inspection_until', 'Техосмотр до', 'date')}
+        ${field('service_every_km', 'ТО каждые, км', 'number', 'inputmode="numeric" placeholder="например 10000"')}
+        ${field('last_service_km', 'Пробег на последнем ТО, км', 'number', 'inputmode="numeric"')}
+      </div>
+      <label class="field"><span>Заметки по машине</span><textarea id="vc_fleet_note" rows="2">${esc(v.fleet_note || '')}</textarea></label>
+      ${v.mileage_date ? `<div class="muted" style="font-size:12px">Пробег обновлён ${dateRu(v.mileage_date, false)}</div>` : ''}
+      <button class="btn btn-primary" id="vcSave">Сохранить данные</button>
+    </div>
+
+    <div data-pane="docs" class="vc-pane hidden">
+      <div class="muted" style="font-size:13px">ПТС, СТС, ОСАГО, диагностическая карта, договор аренды. Можно сфотографировать телефоном.</div>
+      <div class="row-2" style="grid-template-columns:1fr auto">
+        <label class="field"><span>Название документа</span><input type="text" id="docTitle" list="docTitles" placeholder="Например: ОСАГО 2026">
+          <datalist id="docTitles"><option>ПТС</option><option>СТС</option><option>ОСАГО</option><option>Диагностическая карта</option><option>Договор аренды</option></datalist></label>
+        <label class="btn btn-primary" style="align-self:end;height:44px">Добавить файл<input type="file" id="docFile" accept="image/*,application/pdf" hidden></label>
+      </div>
+      <div class="card-list" id="docList">${docs.map(d => `<div class="ccard" data-doc="${d.id}">
+        <div class="avatar">${d.mime?.includes('pdf') ? 'PDF' : 'Фото'}</div>
+        <div class="main"><b>${esc(d.title)}</b><small>${esc(d.original_name || '')} · ${Math.max(1, Math.round(d.size / 1024))} КБ · ${dateRu(d.created_at.slice(0, 10), false)}</small></div>
+        <button class="chip" data-docdel="${d.id}">Удалить</button></div>`).join('') || '<div class="muted">Документов пока нет.</div>'}</div>
+    </div>
+
+    <div data-pane="exp" class="vc-pane hidden">
+      <div class="page-head" style="margin:0"><div>Всего расходов: <b>${money(total)}</b></div>
+        <button class="btn btn-primary btn-sm" id="vcAddExp">+ Расход</button></div>
+      <div class="card-list">${exps.map(e => expenseRow(e)).join('') || '<div class="muted">Расходов пока нет.</div>'}</div>
+    </div>`, []);
+
+  const show = t => {
+    $$('#vcTabs button').forEach(b => b.classList.toggle('active', b.dataset.tab === t));
+    $$('#dialogBody .vc-pane').forEach(p => p.classList.toggle('hidden', p.dataset.pane !== t));
+  };
+  $$('#vcTabs button').forEach(b => b.onclick = () => show(b.dataset.tab));
+  show(tab);
+
+  $('#vcSave').onclick = async () => {
+    const val = k => $('#vc_' + k).value.trim();
+    const num = k => parseInt(val(k), 10) || 0;
+    const body = { ...pickVehicle(v), brand: val('brand'), year: num('year'), plate: val('plate'), vin: val('vin').toUpperCase(),
+      pts: val('pts'), sts: val('sts'), mileage: num('mileage'), osago_until: val('osago_until'), inspection_until: val('inspection_until'),
+      service_every_km: num('service_every_km'), last_service_km: num('last_service_km'), fleet_note: val('fleet_note') };
+    if (body.mileage !== (v.mileage || 0)) body.mileage_date = isoDate(new Date());
+    try {
+      await api('/api/vehicles/' + id, { method: 'PUT', body });
+      await reloadRefs(); toast('Сохранено'); openVehicleCard(id, 'data'); if (S.view === 'fleet') loadFleet();
+    } catch (e) { toast(e.message, true); }
+  };
+  $('#docFile').onchange = async e => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const title = $('#docTitle').value.trim() || file.name.replace(/\.[^.]+$/, '');
+    try {
+      toast('Загружаю…');
+      const prepared = await prepareFile(file);
+      await api(`/api/vehicles/${id}/docs`, { method: 'POST', body: { title, original_name: prepared.name, mime: prepared.mime, data_b64: prepared.data } });
+      toast('Документ добавлен'); openVehicleCard(id, 'docs');
+    } catch (err) { toast(err.message, true); }
+  };
+  $$('#docList [data-doc]').forEach(c => c.onclick = e => {
+    if (e.target.closest('[data-docdel]')) return;
+    openDoc(+c.dataset.doc);
+  });
+  $$('#docList [data-docdel]').forEach(b => b.onclick = async () => {
+    if (!confirm('Удалить документ?')) return;
+    await api('/api/docs/' + b.dataset.docdel, { method: 'DELETE' });
+    toast('Удалён'); openVehicleCard(id, 'docs');
+  });
+  $('#vcAddExp').onclick = () => openExpense(null, { vehicle_id: id }, () => openVehicleCard(id, 'exp'));
+  $$('#dialogBody [data-exp]').forEach(r => r.onclick = () => openExpense(exps.find(e => e.id === +r.dataset.exp), null, () => openVehicleCard(id, 'exp')));
+}
+
+// поля машины, которые есть в настройках: чтобы карточка парка их не затёрла
+function pickVehicle(v) {
+  const keys = ['name', 'plate', 'color', 'default_driver_id', 'sort', 'active', 'ownership', 'owner_name', 'owner_share', 'type_id',
+    'brand', 'year', 'vin', 'pts', 'sts', 'mileage', 'mileage_date', 'osago_until', 'inspection_until', 'service_every_km', 'last_service_km', 'fleet_note'];
+  return Object.fromEntries(keys.filter(k => v[k] !== undefined).map(k => [k, v[k]]));
+}
+
+// Фото ужимаем до 1600 px, чтобы с телефона не грузить по 8 МБ
+function prepareFile(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('Файл не прочитался'));
+    reader.onload = () => {
+      if (!file.type.startsWith('image/')) {
+        if (file.size > (window.DEMO ? 3 : 15) * 1024 * 1024) return reject(new Error(window.DEMO ? 'В демо файл до 3 МБ' : 'Файл больше 15 МБ'));
+        return resolve({ name: file.name, mime: file.type || 'application/octet-stream', data: reader.result });
+      }
+      const img = new Image();
+      img.onload = () => {
+        const k = Math.min(1, 1600 / Math.max(img.width, img.height));
+        const c = document.createElement('canvas');
+        c.width = Math.round(img.width * k); c.height = Math.round(img.height * k);
+        c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+        resolve({ name: file.name.replace(/\.[^.]+$/, '') + '.jpg', mime: 'image/jpeg', data: c.toDataURL('image/jpeg', 0.85) });
+      };
+      img.onerror = () => reject(new Error('Не удалось открыть изображение'));
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+function openDoc(docId) {
+  if (window.DEMO) return DEMO.openDoc(docId);
+  window.open('api/docs/' + docId, '_blank');
+}
+
+function expenseRow(e) {
+  return `<div class="ccard exp" data-exp="${e.id}">
+    <div class="main"><b>${esc(e.title || e.category_title || 'Расход')}</b>
+      <small>${dateRu(e.date, false)}${e.category_title ? ' · ' + esc(e.category_title) : ''}${e.mileage ? ' · ' + e.mileage.toLocaleString('ru-RU') + ' км' : ''}${e.created_by_name ? ' · внёс ' + esc(e.created_by_name) : ''}</small>
+      ${e.note ? `<div class="exp-note">${esc(e.note)}</div>` : ''}</div>
+    <div class="side"><b>${money(e.amount)}</b></div></div>`;
+}
+
+function openExpense(item, preset = null, after = null) {
+  const E = item ? { ...item } : { vehicle_id: preset?.vehicle_id || activeVehicles()[0]?.id, date: isoDate(new Date()), category_id: null, title: '', amount: '', mileage: '', note: '' };
+  const cats = S.expCats.filter(c => c.active || c.id === E.category_id);
+  setDialogWide(false);
+  openDialog(item ? 'Расход' : 'Новый расход', `
+    <div class="seg seg-full seg-wrap" id="exVeh">${S.vehicles.filter(v => v.active || v.id === E.vehicle_id).map(v => `<button data-id="${v.id}"><i class="dot" style="background:${esc(v.color)}"></i>${esc(v.name)}</button>`).join('')}</div>
+    <div class="block-title">Статья</div>
+    <div class="chips" id="exCat">${cats.map(c => `<button type="button" data-id="${c.id}">${esc(c.title)}</button>`).join('')}</div>
+    <label class="field"><span>Что сделали или купили</span><input type="text" id="exTitle" value="${esc(E.title)}" placeholder="Например: замена передних колодок"></label>
+    <div class="grid-2">
+      <label class="field"><span>Сумма, ₽</span><input type="number" id="exAmount" inputmode="decimal" min="0" value="${E.amount}"></label>
+      <label class="field"><span>Дата</span><input type="date" id="exDate" value="${E.date}"></label>
+      <label class="field"><span>Пробег, км (необязательно)</span><input type="number" id="exMileage" inputmode="numeric" value="${E.mileage || ''}"></label>
+    </div>
+    <label class="field"><span>Комментарий: почему, где делали, кто</span><textarea id="exNote" rows="3" placeholder="Например: стучало спереди, делали в сервисе на Рахова, гарантия 6 мес.">${esc(E.note)}</textarea></label>
+    ${item?.created_by_name ? `<div class="muted" style="font-size:12px">Внёс: ${esc(item.created_by_name)}, ${esc((item.created_at || '').slice(0, 16))}</div>` : ''}`, [
+    ...(item ? [{ text: 'Удалить', danger: true, onClick: async () => {
+      if (!confirm('Удалить расход?')) return;
+      await api('/api/expenses/' + item.id, { method: 'DELETE' }); closeDialog(); toast('Удалён'); if (after) await after();
+    } }] : []),
+    { text: 'Сохранить', primary: true, onClick: async () => {
+      const amount = +$('#exAmount').value;
+      if (!E.vehicle_id) throw new Error('Выберите машину');
+      if (!amount) throw new Error('Укажите сумму');
+      if (!E.category_id && !$('#exTitle').value.trim()) throw new Error('Выберите статью или напишите, что сделали');
+      await api(item ? '/api/expenses/' + item.id : '/api/expenses', { method: item ? 'PUT' : 'POST', body: {
+        vehicle_id: E.vehicle_id, date: $('#exDate').value || isoDate(new Date()), category_id: E.category_id, title: $('#exTitle').value.trim(),
+        amount, mileage: parseInt($('#exMileage').value, 10) || 0, note: $('#exNote').value.trim() } });
+      await reloadRefs();
+      closeDialog(); toast('Расход записан');
+      if (after) await after(); else if (S.view === 'fleet') loadFleet();
+    } }]);
+  const rv = () => $$('#exVeh button').forEach(b => b.classList.toggle('active', +b.dataset.id === E.vehicle_id));
+  const rc = () => $$('#exCat button').forEach(b => b.classList.toggle('active', +b.dataset.id === E.category_id));
+  $$('#exVeh button').forEach(b => b.onclick = () => { E.vehicle_id = +b.dataset.id; rv(); });
+  $$('#exCat button').forEach(b => b.onclick = () => { E.category_id = +b.dataset.id; rc(); });
+  rv(); rc();
+}
+
+function expensesPanel(r) {
+  const exps = r.expenses || [];
+  const total = exps.reduce((s, e) => s + e.amount, 0);
+  const group = keyFn => {
+    const m = new Map();
+    exps.forEach(e => { const k = keyFn(e); const g = m.get(k) || { name: k, count: 0, amount: 0 }; g.count++; g.amount += e.amount; m.set(k, g); });
+    return [...m.values()].sort((a, b) => b.amount - a.amount);
+  };
+  const tbl = (rows, title) => rows.length ? `<table class="tbl"><tr><th>${title}</th><th class="r">Записей</th><th class="r">Сумма</th></tr>
+    ${rows.map(g => `<tr><td>${esc(g.name)}<div class="bar" style="background:var(--danger);width:${total ? Math.max(2, g.amount / total * 100) : 0}%"></div></td><td class="r">${g.count}</td><td class="r"><b>${money(g.amount)}</b></td></tr>`).join('')}</table>`
+    : '<div class="muted">Нет данных</div>';
+  // прибыль по машине: взяли − доля владельца − расходы
+  const profit = S.vehicles.filter(v => v.active || r.by_vehicle.some(g => g.id === v.id)).map(v => {
+    const paid = r.by_vehicle.find(g => g.id === v.id)?.paid || 0;
+    const owner = v.ownership === 'hired' ? Math.round(paid * (+v.owner_share || 0)) / 100 : 0;
+    const exp = exps.filter(e => e.vehicle_id === v.id).reduce((s, e) => s + e.amount, 0);
+    return { v, paid, owner, exp, net: paid - owner - exp };
+  });
+  return `<div class="panel wide"><h4>Прибыль по машинам</h4>
+      <table class="tbl"><tr><th>Машина</th><th class="r">Взяли</th><th class="r">Владельцу</th><th class="r">Расходы</th><th class="r">Остаётся</th></tr>
+      ${profit.map(x => `<tr><td>${esc(x.v.name)}</td><td class="r">${money(x.paid)}</td><td class="r">${x.owner ? money(x.owner) : '—'}</td><td class="r">${x.exp ? money(x.exp) : '—'}</td>
+        <td class="r"><b style="color:${x.net < 0 ? 'var(--danger)' : 'var(--ok)'}">${money(x.net)}</b></td></tr>`).join('')}</table>
+      <div class="muted" style="font-size:12px;margin-top:6px">Взяли с клиентов минус доля владельца наёмной машины и минус расходы на машину за период.</div></div>
+    <div class="panel wide"><div class="page-head" style="margin-bottom:8px"><h4 style="margin:0">Расходы на автопарк: ${money(total)}</h4>
+      <button class="btn btn-ghost btn-sm" id="repAddExp">+ Расход</button></div>
+      ${exps.length ? `<div class="panels">
+        <div><h4>По машинам</h4>${tbl(group(e => e.vehicle_name), 'Машина')}</div>
+        <div><h4>По статьям</h4>${tbl(group(e => e.category_title || 'Без статьи'), 'Статья')}</div>
+        <div class="wide" style="grid-column:1/-1"><h4>Все расходы с комментариями</h4><div class="card-list">${exps.map(expenseRow).join('')}</div></div>
+      </div>` : '<div class="muted">Расходов за период нет.</div>'}</div>`;
 }
 
 /* ================= Автообновление ================= */

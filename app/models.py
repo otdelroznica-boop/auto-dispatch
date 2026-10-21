@@ -35,6 +35,42 @@ class VehicleIn(BaseModel):
     ownership: Literal["own", "hired"] = "own"
     owner_name: str = ""
     owner_share: float = Field(default=0, ge=0, le=100)
+    type_id: Optional[int] = None
+    brand: str = ""
+    year: int = 0
+    vin: str = ""
+    pts: str = ""
+    sts: str = ""
+    mileage: int = 0
+    mileage_date: str = ""
+    osago_until: str = ""
+    inspection_until: str = ""
+    service_every_km: int = 0
+    last_service_km: int = 0
+    fleet_note: str = ""
+
+
+class TypeIn(BaseModel):
+    name: str = Field(min_length=1)
+    sort: int = 0
+    active: int = 1
+
+
+class ExpenseIn(BaseModel):
+    vehicle_id: int
+    date: str = Field(pattern=DATE)
+    category_id: Optional[int] = None
+    title: str = ""
+    amount: float = 0
+    mileage: int = 0
+    note: str = ""
+
+
+class DocIn(BaseModel):
+    title: str = Field(min_length=1)
+    original_name: str = ""
+    mime: str = ""
+    data_b64: str          # содержимое файла в base64
 
 
 class ReasonIn(BaseModel):
@@ -44,7 +80,7 @@ class ReasonIn(BaseModel):
 
 
 class ServiceIn(BaseModel):
-    vehicle_id: Optional[int] = None
+    type_id: Optional[int] = None
     title: str = Field(min_length=1)
     price: float = 0
     unit: str = "шт"
@@ -106,7 +142,7 @@ class SettingsIn(BaseModel):
 class LostIn(BaseModel):
     date: str = Field(pattern=DATE)
     time: str = ""
-    vehicle_id: Optional[int] = None
+    type_id: Optional[int] = None
     reason_id: Optional[int] = None
     lines: list[OrderLineIn] = []
     amount: float = 0

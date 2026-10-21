@@ -2,7 +2,7 @@
 /* Демо-режим для GitHub Pages: сервер заменён эмуляцией API в браузере.
    Повторяет логику app/main.py. Данные хранятся в localStorage этого устройства. */
 (function () {
-  const KEY = 'dsp_demo_db_v2';
+  const KEY = 'dsp_demo_db_v3';
   const STATUS_TEXT = { new: 'Новый', work: 'В работе', done: 'Выполнен', cancel: 'Отменён' };
   const PAY_TEXT = { cash: 'наличные', card: 'перевод', invoice: 'безнал по счёту' };
   let mem = null; // если localStorage недоступен — держим в памяти
@@ -25,18 +25,28 @@
       drivers: [{ id: 1, name: 'Алексей', phone: '+7 999 111-22-33', tg_chat_id: '', active: 1 },
         { id: 2, name: 'Сергей', phone: '+7 999 444-55-66', tg_chat_id: '', active: 1 },
         { id: 3, name: 'Рустам', phone: '+7 999 777-88-99', tg_chat_id: '', active: 1 }],
-      vehicles: [{ id: 1, name: 'Эвакуатор', plate: '', color: '#dc2626', default_driver_id: 1, sort: 1, active: 1, ownership: 'own', owner_name: '', owner_share: 0 },
-        { id: 2, name: 'Грузовая', plate: '', color: '#2563eb', default_driver_id: 2, sort: 2, active: 1, ownership: 'own', owner_name: '', owner_share: 0 },
-        { id: 3, name: 'Газель (наём)', plate: '', color: '#16a34a', default_driver_id: 3, sort: 3, active: 1, ownership: 'hired', owner_name: 'Рустам', owner_share: 70 }],
-      reasons: ['Машина занята', 'Нет свободного водителя', 'Далеко, не обслуживаем', 'Не устроила цена', 'Клиент нашёл другого', 'Другое']
+      types: [{ id: 1, name: 'Эвакуатор', sort: 1, active: 1 }, { id: 2, name: 'Грузовая', sort: 2, active: 1 }],
+      expCats: ['Ремонт', 'Запчасти', 'Шины', 'ТО, масло, фильтры', 'Топливо', 'Страховка', 'Техосмотр', 'Мойка', 'Штрафы', 'Другое']
+        .map((title, i) => ({ id: i + 1, title, sort: i + 1, active: 1 })),
+      vehicles: [
+        { id: 1, name: 'Эвакуатор', type_id: 1, plate: 'А123ВС 164', color: '#dc2626', default_driver_id: 1, sort: 1, active: 1, ownership: 'own', owner_name: '', owner_share: 0,
+          brand: 'ГАЗ Next, ломаная платформа', year: 2019, vin: 'X96A21R32K0012345', pts: '52 ОА 123456', sts: '99 12 345678', mileage: 187400, mileage_date: shift(-3),
+          osago_until: shift(18), inspection_until: shift(140), service_every_km: 10000, last_service_km: 178000, fleet_note: '' },
+        { id: 2, name: 'Грузовая', type_id: 2, plate: 'В456ОР 164', color: '#2563eb', default_driver_id: 2, sort: 2, active: 1, ownership: 'own', owner_name: '', owner_share: 0,
+          brand: 'Isuzu ELF, будка 5 м', year: 2017, vin: 'JAANKR85E07123456', pts: '25 УТ 654321', sts: '99 98 765432', mileage: 243100, mileage_date: shift(-1),
+          osago_until: shift(200), inspection_until: shift(-5), service_every_km: 15000, last_service_km: 230000, fleet_note: 'Подтекает гидроборт, следить' },
+        { id: 3, name: 'Газель (наём)', type_id: 2, plate: 'Е789КХ 164', color: '#16a34a', default_driver_id: 3, sort: 3, active: 1, ownership: 'hired', owner_name: 'Рустам', owner_share: 70,
+          brand: 'ГАЗель Next, тент', year: 2021, vin: '', pts: '', sts: '', mileage: 96000, mileage_date: shift(-7),
+          osago_until: shift(90), inspection_until: shift(90), service_every_km: 0, last_service_km: 0, fleet_note: 'Обслуживает владелец' }],
+      docs: [], expenses: [],
+      reasons: ['Все машины заняты', 'Нет свободного водителя', 'Далеко, не обслуживаем', 'Не устроила цена', 'Клиент нашёл другого', 'Другое']
         .map((title, i) => ({ id: i + 1, title, sort: i + 1, active: 1 })),
       lost: [],
       services: [
         [1, 'Эвакуация по городу', 3500, 'шт'], [1, 'Эвакуация за город (за км)', 50, 'км'], [1, 'Заблокированные колёса', 1000, 'шт'],
         [1, 'Внедорожник / микроавтобус', 1000, 'шт'], [1, 'Ожидание (за час)', 500, 'ч'], [2, 'Грузоперевозка по городу (за час)', 1400, 'ч'],
         [2, 'Грузчик (за час)', 600, 'ч'], [2, 'Межгород (за км)', 40, 'км'], [null, 'Ночной тариф', 1000, 'шт'],
-        [3, 'Газель по городу (за час)', 1200, 'ч'], [3, 'Грузчик (за час)', 600, 'ч'],
-      ].map(([vehicle_id, title, price, unit], i) => ({ id: i + 1, vehicle_id, title, price, unit, active: 1 })),
+      ].map(([type_id, title, price, unit], i) => ({ id: i + 1, type_id, title, price, unit, active: 1 })),
       clients: [
         ['person', 'Андрей', '+7 (960) 777-22-11', ''], ['person', 'Сергей', '+7 (922) 777-28-19', ''],
         ['person', 'Марина', '+7 (903) 123-45-67', ''], ['person', 'Игорь Петрович', '+7 (927) 555-10-20', ''],
@@ -45,7 +55,7 @@
       ].map(([kind, name, phone, inn], i) => ({ id: i + 1, kind, name, phone, phone_norm: normPhone(phone), inn, note: '', created_at: now() })),
       orders: [], lines: [],
     };
-    db.seq = { users: 2, drivers: 3, vehicles: 3, services: 11, clients: 7, orders: 0, lines: 0, reasons: 6, lost: 0 };
+    db.seq = { users: 2, drivers: 3, vehicles: 3, services: 9, clients: 7, orders: 0, lines: 0, reasons: 6, lost: 0, types: 2, expCats: 10, docs: 0, expenses: 0 };
 
     // детерминированный генератор, чтобы демо выглядело одинаково
     let x = 7;
@@ -56,7 +66,7 @@
     const NOTES = ['Renault Duster, пробито 2 колеса', 'Не заводится', 'ДТП, не на ходу', 'Переезд, 2-комн. квартира',
       'Стройматериалы, 1,5 т', 'Kia Rio, заблокировано колесо', ''];
     const byVeh = {};
-    [1, 2, 3].forEach(v => { byVeh[v] = db.services.filter(s => s.vehicle_id === v || s.vehicle_id === null); });
+    db.vehicles.forEach(v => { byVeh[v.id] = db.services.filter(s => s.type_id === v.type_id || s.type_id === null); });
     for (let off = -14; off <= 1; off++) {
       for (const veh of [1, 2, 3]) {
         let hour = 8;
@@ -101,11 +111,21 @@
         const partner = rnd() < 0.25;
         const amount = lines.reduce((s, x) => s + x.qty * x.price, 0);
         db.lost.push({ id: ++db.seq.lost, date: shift(off), time: `${String(8 + Math.floor(rnd() * 12)).padStart(2, '0')}:${pick(['05', '20', '40', '55'])}`,
-          vehicle_id: veh, reason_id: pick([1, 1, 1, 2, 2, 3, 4, 5]), lines, amount, client_phone: '', note: '',
+          type_id: db.vehicles.find(v => v.id === veh).type_id, reason_id: pick([1, 1, 1, 2, 2, 3, 4, 5]), lines, amount, client_phone: '', note: '',
           partner: partner ? 1 : 0, partner_name: partner ? 'Магомед' : '', partner_income: partner ? Math.round(amount * 0.15 / 50) * 50 : 0,
           created_by: 1, created_at: now() });
       }
     }
+    // расходы по машинам
+    [[1, -20, 3, 'Зимняя резина, 6 шт', 54000, 182000, 'Старая лысая, шиномонтаж на Рахова'],
+      [1, -12, 4, 'ТО: масло, фильтры', 9800, 178000, 'Плановое ТО'],
+      [1, -4, 1, 'Замена троса лебёдки', 7500, 186900, 'Трос перетёрся на погрузке'],
+      [2, -16, 2, 'Колодки передние', 6200, 241000, 'Скрипели при торможении'],
+      [2, -9, 1, 'Ремонт гидроборта', 18500, 242300, 'Течь гидравлики, делали в сервисе «Гидравлика 64», гарантия 3 мес.'],
+      [2, -2, 9, 'Штраф за превышение', 500, 0, 'Камера на Московском шоссе'],
+      [1, -6, 8, 'Мойка', 800, 0, ''], [2, -6, 8, 'Мойка', 1000, 0, ''],
+    ].forEach(([vid, off, cat, title, amount, mileage, note]) => db.expenses.push({ id: ++db.seq.expenses, vehicle_id: vid, date: shift(off),
+      category_id: cat, title, amount, mileage, note, created_by: 1, created_at: now() }));
     return db;
   }
 
@@ -213,11 +233,18 @@
   }
 
   function enrichLost(db, l) {
-    const v = db.vehicles.find(x => x.id === l.vehicle_id), r = db.reasons.find(x => x.id === l.reason_id), u = db.users.find(x => x.id === l.created_by);
-    return { ...l, vehicle_name: v?.name ?? null, vehicle_color: v?.color ?? null, reason_title: r?.title ?? null, created_by_name: u?.name ?? null };
+    const t = db.types.find(x => x.id === l.type_id), r = db.reasons.find(x => x.id === l.reason_id), u = db.users.find(x => x.id === l.created_by);
+    return { ...l, type_name: t?.name ?? null, vehicle_name: null, reason_title: r?.title ?? null, created_by_name: u?.name ?? null };
   }
   const lostBetween = (db, f, t) => db.lost.filter(l => l.date >= f && l.date <= t)
     .sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time) || a.id - b.id).map(l => enrichLost(db, l));
+
+  function enrichExpense(db, e) {
+    const v = db.vehicles.find(x => x.id === e.vehicle_id), c = db.expCats.find(x => x.id === e.category_id), u = db.users.find(x => x.id === e.created_by);
+    return { ...e, vehicle_name: v?.name ?? '', vehicle_color: v?.color ?? '', category_title: c?.title ?? null, created_by_name: u?.name ?? null };
+  }
+  const expensesBetween = (db, f, t, vid) => db.expenses.filter(e => e.date >= f && e.date <= t && (!vid || e.vehicle_id === vid))
+    .sort((a, b) => b.date.localeCompare(a.date) || b.id - a.id).map(e => enrichExpense(db, e));
 
   function report(db, f, t) {
     const orders = ordersBetween(db, f, t), active = orders.filter(o => o.status !== 'cancel');
@@ -251,6 +278,7 @@
       by_day: byDay,
       debts: active.filter(o => debtOf(o) > 0.009),
       lost: lostBetween(db, f, t),
+      expenses: expensesBetween(db, f, t),
     };
   }
 
@@ -276,11 +304,44 @@
       delete s.tg_token;
       return { me: user, vehicles: [...db.vehicles].sort((a, b) => a.sort - b.sort || a.id - b.id), drivers: [...db.drivers].sort((a, b) => a.name.localeCompare(b.name)),
         reasons: [...db.reasons].sort((a, b) => a.sort - b.sort || a.id - b.id),
+        types: [...db.types].sort((a, b) => a.sort - b.sort || a.id - b.id),
+        expense_categories: [...db.expCats].sort((a, b) => a.sort - b.sort || a.id - b.id),
         services: [...db.services].sort((a, b) => (a.vehicle_id === null) - (b.vehicle_id === null) || (a.vehicle_id || 0) - (b.vehicle_id || 0) || a.id - b.id), settings: s };
     }
     if ((m = path.match(/^\/api\/(vehicles|drivers|services)(?:\/(\d+))?$/))) return done({ id: upsert(db, m[1], m[2] ? +m[2] : null, body) });
 
     if ((m = path.match(/^\/api\/reasons(?:\/(\d+))?$/))) return done({ id: upsert(db, 'reasons', m[1] ? +m[1] : null, body) });
+    if ((m = path.match(/^\/api\/types(?:\/(\d+))?$/))) return done({ id: upsert(db, 'types', m[1] ? +m[1] : null, body) });
+    if ((m = path.match(/^\/api\/expense-categories(?:\/(\d+))?$/))) return done({ id: upsert(db, 'expCats', m[1] ? +m[1] : null, body) });
+    if ((m = path.match(/^\/api\/vehicles\/(\d+)\/docs$/))) {
+      const vid = +m[1];
+      if (method === 'GET') return db.docs.filter(d => d.vehicle_id === vid).sort((a, b) => b.id - a.id)
+        .map(({ data, ...d }) => ({ ...d, created_by_name: db.users.find(u => u.id === d.created_by)?.name ?? null }));
+      const id = ++db.seq.docs;
+      const size = Math.round((body.data_b64.split(',').pop().length * 3) / 4);
+      db.docs.push({ id, vehicle_id: vid, title: body.title, original_name: body.original_name || '', mime: body.mime || '', size,
+        data: body.data_b64, created_by: user.id, created_at: now() });
+      try { save(db); } catch { /* */ }
+      try { localStorage.setItem(KEY, JSON.stringify(db)); } catch { db.docs.pop(); fail(400, 'В демо не хватило места в браузере. Попробуйте файл поменьше.'); }
+      return { id };
+    }
+    if ((m = path.match(/^\/api\/docs\/(\d+)$/)) && method === 'DELETE') { db.docs = db.docs.filter(d => d.id !== +m[1]); return done({ ok: true }); }
+    if (path === '/api/expenses' && method === 'GET') {
+      return expensesBetween(db, q.get('date_from') || '2000-01-01', q.get('date_to') || '2999-12-31', q.get('vehicle_id') ? +q.get('vehicle_id') : null);
+    }
+    if ((m = path.match(/^\/api\/expenses(?:\/(\d+))?$/))) {
+      const id = m[1] ? +m[1] : null;
+      if (method === 'DELETE') { db.expenses = db.expenses.filter(e => e.id !== id); return done({ ok: true }); }
+      const data = { vehicle_id: body.vehicle_id, date: body.date, category_id: body.category_id ?? null, title: body.title || '',
+        amount: body.amount || 0, mileage: body.mileage || 0, note: body.note || '' };
+      if (!id) { data.created_by = user.id; data.created_at = now(); }
+      const newId = upsert(db, 'expenses', id, data);
+      const v = db.vehicles.find(x => x.id === data.vehicle_id);
+      if (v && data.mileage > (v.mileage || 0)) { v.mileage = data.mileage; v.mileage_date = data.date; }
+      const cat = db.expCats.find(c => c.id === data.category_id);
+      if (v && data.mileage && cat && cat.title.toUpperCase().startsWith('ТО') && data.mileage > (v.last_service_km || 0)) v.last_service_km = data.mileage;
+      return done(enrichExpense(db, db.expenses.find(e => e.id === newId)));
+    }
     if (path === '/api/lost' && method === 'GET') {
       const d = q.get('date') || iso(new Date());
       return lostBetween(db, q.get('date_from') || d, q.get('date_to') || d);
@@ -290,7 +351,7 @@
       if (method === 'DELETE') { db.lost = db.lost.filter(l => l.id !== id); return done({ ok: true }); }
       if (!/^\d{4}-\d{2}-\d{2}$/.test(body.date || '')) fail(422, 'Проверьте дату');
       const lines = (body.lines || []).filter(l => String(l.title).trim());
-      const data = { date: body.date, time: body.time || '', vehicle_id: body.vehicle_id ?? null, reason_id: body.reason_id ?? null, lines,
+      const data = { date: body.date, time: body.time || '', type_id: body.type_id ?? null, reason_id: body.reason_id ?? null, lines,
         amount: lines.length ? Math.round(lines.reduce((s, l) => s + l.qty * l.price, 0) * 100) / 100 : (body.amount || 0),
         client_phone: body.client_phone || '', note: body.note || '', partner: body.partner ? 1 : 0,
         partner_name: body.partner ? (body.partner_name || '') : '', partner_income: body.partner ? (body.partner_income || 0) : 0 };
@@ -366,6 +427,16 @@
   };
 
   window.DEMO = {
+    openDoc(id) {
+      const d = load().docs.find(x => x.id === id);
+      if (!d) return;
+      const [head, b64] = d.data.split(',');
+      const bin = atob(b64), arr = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+      const url = URL.createObjectURL(new Blob([arr], { type: d.mime || head.slice(5, head.indexOf(';')) }));
+      window.open(url, '_blank');
+      setTimeout(() => URL.revokeObjectURL(url), 60000);
+    },
     reset() { try { localStorage.removeItem(KEY); localStorage.removeItem('dsp_demo_token'); } catch { /* */ } mem = null; location.reload(); },
     exportCsv(f, t) {
       const db = load();

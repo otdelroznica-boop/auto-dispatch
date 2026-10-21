@@ -28,6 +28,14 @@ CREATE TABLE IF NOT EXISTS drivers (
     active INTEGER DEFAULT 1
 );
 
+-- Вид техники: эвакуатор, грузовая... Клиенту нужен вид, а не конкретная машина
+CREATE TABLE IF NOT EXISTS vehicle_types (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    sort INTEGER DEFAULT 0,
+    active INTEGER DEFAULT 1
+);
+
 CREATE TABLE IF NOT EXISTS vehicles (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
@@ -40,12 +48,46 @@ CREATE TABLE IF NOT EXISTS vehicles (
 
 CREATE TABLE IF NOT EXISTS services (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    vehicle_id INTEGER REFERENCES vehicles(id) ON DELETE SET NULL,  -- NULL = для любой машины
+    vehicle_id INTEGER REFERENCES vehicles(id) ON DELETE SET NULL,  -- устарело, вместо него type_id
     title TEXT NOT NULL,
     price REAL NOT NULL DEFAULT 0,
     unit TEXT DEFAULT 'шт',
     active INTEGER DEFAULT 1
 );
+
+-- Автопарк: документы (сканы/фото) и расходы по машине
+CREATE TABLE IF NOT EXISTS vehicle_docs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    vehicle_id INTEGER NOT NULL REFERENCES vehicles(id) ON DELETE CASCADE,
+    title TEXT NOT NULL,
+    filename TEXT NOT NULL,        -- имя файла на диске в data/uploads
+    original_name TEXT DEFAULT '',
+    mime TEXT DEFAULT '',
+    size INTEGER DEFAULT 0,
+    created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS expense_categories (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT NOT NULL,
+    sort INTEGER DEFAULT 0,
+    active INTEGER DEFAULT 1
+);
+
+CREATE TABLE IF NOT EXISTS vehicle_expenses (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    vehicle_id INTEGER NOT NULL REFERENCES vehicles(id) ON DELETE CASCADE,
+    date TEXT NOT NULL,
+    category_id INTEGER REFERENCES expense_categories(id) ON DELETE SET NULL,
+    title TEXT DEFAULT '',         -- что сделали/купили
+    amount REAL DEFAULT 0,
+    mileage INTEGER DEFAULT 0,     -- пробег на момент расхода, 0 = не указан
+    note TEXT DEFAULT '',          -- комментарий: почему, кто, где
+    created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS ix_exp_date ON vehicle_expenses(date);
 
 CREATE TABLE IF NOT EXISTS clients (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -158,21 +200,68 @@ def normalize_phone(phone: str) -> str:
     return digits
 
 
-DEFAULT_REASONS = ["Машина занята", "Нет свободного водителя", "Далеко, не обслуживаем", "Не устроила цена",
+DEFAULT_TYPES = ["Эвакуатор", "Грузовая"]
+DEFAULT_EXPENSE_CATEGORIES = ["Ремонт", "Запчасти", "Шины", "ТО, масло, фильтры", "Топливо", "Страховка", "Техосмотр",
+                              "Мойка", "Штрафы", "Другое"]
+DEFAULT_REASONS = ["Все машины заняты", "Нет свободного водителя", "Далеко, не обслуживаем", "Не устроила цена",
                    "Клиент нашёл другого", "Другое"]
+
+
+NEW_COLUMNS = {
+    "vehicles": [
+        ("ownership", "TEXT DEFAULT 'own'"),      # own | hired
+        ("owner_name", "TEXT DEFAULT ''"),
+        ("owner_share", "REAL DEFAULT 0"),        # % от «взяли», который отдаём владельцу
+        ("type_id", "INTEGER"),
+        # карточка для контроля парка
+        ("brand", "TEXT DEFAULT ''"),             # марка, модель
+        ("year", "INTEGER DEFAULT 0"),
+        ("vin", "TEXT DEFAULT ''"),
+        ("pts", "TEXT DEFAULT ''"),               # номер ПТС
+        ("sts", "TEXT DEFAULT ''"),               # номер СТС
+        ("mileage", "INTEGER DEFAULT 0"),         # текущий пробег, км
+        ("mileage_date", "TEXT DEFAULT ''"),
+        ("osago_until", "TEXT DEFAULT ''"),       # ОСАГО действует до
+        ("inspection_until", "TEXT DEFAULT ''"),  # техосмотр (диагностическая карта) до
+        ("service_every_km", "INTEGER DEFAULT 0"),  # ТО каждые N км
+        ("last_service_km", "INTEGER DEFAULT 0"),   # пробег на последнем ТО
+        ("fleet_note", "TEXT DEFAULT ''"),
+    ],
+    "services": [("type_id", "INTEGER")],         # NULL = для любой техники
+    "lost_orders": [("type_id", "INTEGER")],
+}
 
 
 def migrate(conn):
     """Новые поля в уже существующих базах."""
-    cols = {r["name"] for r in conn.execute("PRAGMA table_info(vehicles)")}
-    for name, ddl in [("ownership", "TEXT DEFAULT 'own'"),       # own | hired
-                      ("owner_name", "TEXT DEFAULT ''"),
-                      ("owner_share", "REAL DEFAULT 0")]:         # % от «взяли», который отдаём владельцу
-        if name not in cols:
-            conn.execute(f"ALTER TABLE vehicles ADD COLUMN {name} {ddl}")
-    if conn.execute("SELECT COUNT(*) FROM lost_reasons").fetchone()[0] == 0:
-        conn.executemany("INSERT INTO lost_reasons(title, sort) VALUES (?, ?)",
-                         [(t, i) for i, t in enumerate(DEFAULT_REASONS, 1)])
+    for table, columns in NEW_COLUMNS.items():
+        cols = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+        for name, ddl in columns:
+            if name not in cols:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}")
+    for table, titles in (("lost_reasons", DEFAULT_REASONS), ("vehicle_types", None),
+                          ("expense_categories", DEFAULT_EXPENSE_CATEGORIES)):
+        if conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 0:
+            if table == "vehicle_types":
+                conn.executemany("INSERT INTO vehicle_types(name, sort) VALUES (?, ?)",
+                                 [(t, i) for i, t in enumerate(DEFAULT_TYPES, 1)])
+            else:
+                conn.executemany(f"INSERT INTO {table}(title, sort) VALUES (?, ?)",
+                                 [(t, i) for i, t in enumerate(titles, 1)])
+
+
+def assign_types(conn):
+    """Старые данные: проставить вид техники машинам, услугам и отказам."""
+    types = {r["name"].lower(): r["id"] for r in conn.execute("SELECT id, name FROM vehicle_types")}
+    tow = next((i for n, i in types.items() if "эвакуат" in n), None)
+    cargo = next((i for n, i in types.items() if "груз" in n), None)
+    for v in conn.execute("SELECT id, name FROM vehicles WHERE type_id IS NULL").fetchall():
+        conn.execute("UPDATE vehicles SET type_id = ? WHERE id = ?",
+                     (tow if "эвакуат" in v["name"].lower() else cargo, v["id"]))
+    conn.execute("UPDATE services SET type_id = (SELECT type_id FROM vehicles WHERE vehicles.id = services.vehicle_id), "
+                 "vehicle_id = NULL WHERE type_id IS NULL AND vehicle_id IS NOT NULL")
+    conn.execute("UPDATE lost_orders SET type_id = (SELECT type_id FROM vehicles WHERE vehicles.id = lost_orders.vehicle_id) "
+                 "WHERE type_id IS NULL AND vehicle_id IS NOT NULL")
 
 
 def init_db():
@@ -186,7 +275,7 @@ def init_db():
         # Первый вход: пользователь «Админ», пин 1111 — сменить в Настройках
         conn.execute("INSERT INTO users(name, pin_hash, is_admin) VALUES (?, ?, 1)", ("Админ", hash_pin("1111")))
 
-    if conn.execute("SELECT COUNT(*) FROM vehicles").fetchone()[0] == 0:
+    if conn.execute("SELECT COUNT(*) FROM vehicles").fetchone()[0] == 0:  # первый запуск: пример парка
         conn.execute("INSERT INTO drivers(id, name, phone) VALUES (1, 'Алексей', '+7 999 111-22-33')")
         conn.execute("INSERT INTO drivers(id, name, phone) VALUES (2, 'Сергей', '+7 999 444-55-66')")
         conn.execute(
@@ -207,5 +296,7 @@ def init_db():
                 (None, "Ночной тариф", 1000, "шт"),
             ],
         )
+    assign_types(conn)
+    conn.execute("UPDATE lost_reasons SET title = 'Все машины заняты' WHERE title = 'Машина занята'")
     conn.commit()
     conn.close()

@@ -1,3 +1,4 @@
+import base64
 import io
 import json
 import secrets
@@ -10,12 +11,14 @@ from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import telegram
-from .database import check_pin, get_connection, hash_pin, init_db, normalize_phone
-from .models import (ClientIn, DriverIn, LoginIn, LostIn, OrderIn, PayIn, ReasonIn, ServiceIn, SettingsIn, StatusIn,
-                     UserIn, VehicleIn)
+from .database import DB_PATH, check_pin, get_connection, hash_pin, init_db, normalize_phone
+from .models import (ClientIn, DocIn, DriverIn, ExpenseIn, LoginIn, LostIn, OrderIn, PayIn, ReasonIn, ServiceIn,
+                     SettingsIn, StatusIn, TypeIn, UserIn, VehicleIn)
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 COOKIE = "dispatch_session"
+UPLOADS = DB_PATH.parent / "uploads"
+MAX_DOC_BYTES = 15 * 1024 * 1024
 
 app = FastAPI(title="Диспетчерская")
 
@@ -99,7 +102,9 @@ def bootstrap(user=Depends(current_user), conn=Depends(db)):
         "me": user,
         "vehicles": rows(conn.execute("SELECT * FROM vehicles ORDER BY sort, id")),
         "drivers": rows(conn.execute("SELECT * FROM drivers ORDER BY name")),
-        "services": rows(conn.execute("SELECT * FROM services ORDER BY vehicle_id IS NULL, vehicle_id, id")),
+        "types": rows(conn.execute("SELECT * FROM vehicle_types ORDER BY sort, id")),
+        "expense_categories": rows(conn.execute("SELECT * FROM expense_categories ORDER BY sort, id")),
+        "services": rows(conn.execute("SELECT * FROM services ORDER BY type_id IS NULL, type_id, id")),
         "reasons": rows(conn.execute("SELECT * FROM lost_reasons ORDER BY sort, id")),
         "settings": s,
     }
@@ -120,7 +125,8 @@ def upsert(conn, table: str, item_id: Optional[int], data: dict) -> int:
 @app.post("/api/vehicles")
 @app.put("/api/vehicles/{item_id}")
 def save_vehicle(data: VehicleIn, item_id: Optional[int] = None, user=Depends(current_user), conn=Depends(db)):
-    return {"id": upsert(conn, "vehicles", item_id, data.model_dump())}
+    # при правке пишем только присланные поля: настройки и карточка парка не затирают друг друга
+    return {"id": upsert(conn, "vehicles", item_id, data.model_dump(exclude_unset=bool(item_id)))}
 
 
 @app.post("/api/drivers")
@@ -141,11 +147,123 @@ def save_reason(data: ReasonIn, item_id: Optional[int] = None, user=Depends(curr
     return {"id": upsert(conn, "lost_reasons", item_id, data.model_dump())}
 
 
+@app.post("/api/types")
+@app.put("/api/types/{item_id}")
+def save_type(data: TypeIn, item_id: Optional[int] = None, user=Depends(current_user), conn=Depends(db)):
+    return {"id": upsert(conn, "vehicle_types", item_id, data.model_dump())}
+
+
+@app.post("/api/expense-categories")
+@app.put("/api/expense-categories/{item_id}")
+def save_expense_category(data: ReasonIn, item_id: Optional[int] = None, user=Depends(current_user), conn=Depends(db)):
+    return {"id": upsert(conn, "expense_categories", item_id, data.model_dump())}
+
+
+# ---------- Автопарк: документы ----------
+
+@app.get("/api/vehicles/{vehicle_id}/docs")
+def list_docs(vehicle_id: int, user=Depends(current_user), conn=Depends(db)):
+    return rows(conn.execute("SELECT d.id, d.title, d.original_name, d.mime, d.size, d.created_at, u.name AS created_by_name "
+                             "FROM vehicle_docs d LEFT JOIN users u ON u.id = d.created_by "
+                             "WHERE d.vehicle_id = ? ORDER BY d.id DESC", (vehicle_id,)))
+
+
+@app.post("/api/vehicles/{vehicle_id}/docs")
+def upload_doc(vehicle_id: int, data: DocIn, user=Depends(current_user), conn=Depends(db)):
+    try:
+        content = base64.b64decode(data.data_b64.split(",", 1)[-1])
+    except Exception:
+        raise HTTPException(400, "Файл не прочитался")
+    if len(content) > MAX_DOC_BYTES:
+        raise HTTPException(400, "Файл больше 15 МБ")
+    ext = Path(data.original_name).suffix.lower()[:8] if data.original_name else ""
+    name = f"v{vehicle_id}_{secrets.token_hex(8)}{ext}"
+    UPLOADS.mkdir(parents=True, exist_ok=True)
+    (UPLOADS / name).write_bytes(content)
+    doc_id = conn.execute("INSERT INTO vehicle_docs(vehicle_id, title, filename, original_name, mime, size, created_by) "
+                          "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                          (vehicle_id, data.title, name, data.original_name, data.mime, len(content), user["id"])).lastrowid
+    conn.commit()
+    return {"id": doc_id}
+
+
+@app.get("/api/docs/{doc_id}")
+def get_doc(doc_id: int, user=Depends(current_user), conn=Depends(db)):
+    row = conn.execute("SELECT * FROM vehicle_docs WHERE id = ?", (doc_id,)).fetchone()
+    if not row or not (UPLOADS / row["filename"]).exists():
+        raise HTTPException(404, "Файл не найден")
+    return FileResponse(UPLOADS / row["filename"], media_type=row["mime"] or "application/octet-stream",
+                        filename=row["original_name"] or row["filename"], content_disposition_type="inline")
+
+
+@app.delete("/api/docs/{doc_id}")
+def delete_doc(doc_id: int, user=Depends(current_user), conn=Depends(db)):
+    row = conn.execute("SELECT filename FROM vehicle_docs WHERE id = ?", (doc_id,)).fetchone()
+    if row:
+        (UPLOADS / row["filename"]).unlink(missing_ok=True)
+        conn.execute("DELETE FROM vehicle_docs WHERE id = ?", (doc_id,))
+        conn.commit()
+    return {"ok": True}
+
+
+# ---------- Автопарк: расходы ----------
+
+EXPENSE_SQL = """
+SELECT e.*, v.name AS vehicle_name, v.color AS vehicle_color, c.title AS category_title, u.name AS created_by_name
+FROM vehicle_expenses e
+JOIN vehicles v ON v.id = e.vehicle_id
+LEFT JOIN expense_categories c ON c.id = e.category_id
+LEFT JOIN users u ON u.id = e.created_by
+"""
+
+
+def load_expenses(conn, date_from: str, date_to: str, vehicle_id: Optional[int] = None) -> list[dict]:
+    sql, args = EXPENSE_SQL + " WHERE e.date BETWEEN ? AND ?", [date_from, date_to]
+    if vehicle_id:
+        sql += " AND e.vehicle_id = ?"
+        args.append(vehicle_id)
+    return rows(conn.execute(sql + " ORDER BY e.date DESC, e.id DESC", args))
+
+
+@app.get("/api/expenses")
+def list_expenses(date_from: str = "2000-01-01", date_to: str = "2999-12-31", vehicle_id: Optional[int] = None,
+                  user=Depends(current_user), conn=Depends(db)):
+    return load_expenses(conn, date_from, date_to, vehicle_id)
+
+
+@app.post("/api/expenses")
+@app.put("/api/expenses/{item_id}")
+def save_expense(data: ExpenseIn, item_id: Optional[int] = None, user=Depends(current_user), conn=Depends(db)):
+    payload = data.model_dump()
+    if not item_id:
+        payload["created_by"] = user["id"]
+    item_id = upsert(conn, "vehicle_expenses", item_id, payload)
+    # пробег из расхода двигает текущий пробег машины вперёд
+    if data.mileage:
+        conn.execute("UPDATE vehicles SET mileage = ?, mileage_date = ? WHERE id = ? AND COALESCE(mileage, 0) < ?",
+                     (data.mileage, data.date, data.vehicle_id, data.mileage))
+        # расход по статье «ТО...» = прошли техобслуживание на этом пробеге
+        cat = conn.execute("SELECT title FROM expense_categories WHERE id = ?", (data.category_id,)).fetchone()
+        if cat and cat["title"].upper().startswith("ТО"):
+            conn.execute("UPDATE vehicles SET last_service_km = ? WHERE id = ? AND COALESCE(last_service_km, 0) < ?",
+                         (data.mileage, data.vehicle_id, data.mileage))
+        conn.commit()
+    return dict(conn.execute(EXPENSE_SQL + " WHERE e.id = ?", (item_id,)).fetchone())
+
+
+@app.delete("/api/expenses/{item_id}")
+def delete_expense(item_id: int, user=Depends(current_user), conn=Depends(db)):
+    conn.execute("DELETE FROM vehicle_expenses WHERE id = ?", (item_id,))
+    conn.commit()
+    return {"ok": True}
+
+
 # ---------- Отказы (упущенная прибыль) ----------
 
 LOST_SQL = """
-SELECT l.*, v.name AS vehicle_name, v.color AS vehicle_color, r.title AS reason_title, u.name AS created_by_name
+SELECT l.*, t.name AS type_name, v.name AS vehicle_name, r.title AS reason_title, u.name AS created_by_name
 FROM lost_orders l
+LEFT JOIN vehicle_types t ON t.id = l.type_id
 LEFT JOIN vehicles v ON v.id = l.vehicle_id
 LEFT JOIN lost_reasons r ON r.id = l.reason_id
 LEFT JOIN users u ON u.id = l.created_by
@@ -175,7 +293,7 @@ def list_lost(date: Optional[str] = None, date_from: Optional[str] = None, date_
 def save_lost(data: LostIn, item_id: Optional[int] = None, user=Depends(current_user), conn=Depends(db)):
     lines = [l.model_dump() for l in data.lines if l.title.strip()]
     payload = {
-        "date": data.date, "time": data.time, "vehicle_id": data.vehicle_id, "reason_id": data.reason_id,
+        "date": data.date, "time": data.time, "type_id": data.type_id, "reason_id": data.reason_id,
         "lines_json": json.dumps(lines, ensure_ascii=False),
         "amount": round(sum(l["qty"] * l["price"] for l in lines), 2) if lines else data.amount,
         "client_phone": data.client_phone, "note": data.note, "partner": int(data.partner),
@@ -479,6 +597,7 @@ def report(date_from: str, date_to: str, user=Depends(current_user), conn=Depend
         "by_day": [by_day.get(d) or {"date": d, "orders": 0, "plan": 0.0, "paid": 0.0} for d in days_between(date_from, date_to)],
         "debts": debts,
         "lost": load_lost(conn, date_from, date_to),
+        "expenses": load_expenses(conn, date_from, date_to),
     }
 
 
@@ -510,18 +629,31 @@ def export(date_from: str, date_to: str, user=Depends(current_user), conn=Depend
 
     # Отказы
     ws2 = wb.create_sheet("Отказы")
-    ws2.append(["Дата", "Время", "Машина", "Причина", "Услуги", "Упущено, ₽", "Передали партнёру", "Получили с передачи, ₽",
+    ws2.append(["Дата", "Время", "Вид техники", "Причина", "Услуги", "Упущено, ₽", "Передали партнёру", "Получили с передачи, ₽",
                 "Телефон", "Комментарий"])
     for cell in ws2[1]:
         cell.font = Font(bold=True)
     for l in load_lost(conn, date_from, date_to):
-        ws2.append([l["date"], l["time"], l["vehicle_name"] or "", l["reason_title"] or "",
+        ws2.append([l["date"], l["time"], l["type_name"] or l["vehicle_name"] or "", l["reason_title"] or "",
                     "; ".join(x["title"] + (f" × {x['qty']:g}" if x["qty"] != 1 else "") for x in l["lines"]),
                     l["amount"], l["partner_name"] or "да" if l["partner"] else "", l["partner_income"] if l["partner"] else 0,
                     l["client_phone"], l["note"]])
     for col, width in zip("ABCDEFGHIJ", [11, 7, 14, 24, 40, 12, 18, 14, 17, 30]):
         ws2.column_dimensions[col].width = width
     ws2.freeze_panes = "A2"
+
+    # Расходы на автопарк
+    expenses = load_expenses(conn, date_from, date_to)
+    ws4 = wb.create_sheet("Расходы")
+    ws4.append(["Дата", "Машина", "Статья", "Что сделали", "Сумма, ₽", "Пробег, км", "Комментарий", "Кто внёс"])
+    for cell in ws4[1]:
+        cell.font = Font(bold=True)
+    for e in reversed(expenses):
+        ws4.append([e["date"], e["vehicle_name"], e["category_title"] or "", e["title"], e["amount"], e["mileage"] or "",
+                    e["note"], e["created_by_name"] or ""])
+    for col, width in zip("ABCDEFGH", [11, 16, 18, 30, 11, 11, 40, 14]):
+        ws4.column_dimensions[col].width = width
+    ws4.freeze_panes = "A2"
 
     # Наёмные машины: сколько отдать владельцу
     hired = {r["id"]: dict(r) for r in conn.execute("SELECT * FROM vehicles WHERE ownership = 'hired'")}
