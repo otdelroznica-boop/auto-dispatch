@@ -74,6 +74,21 @@ def main():
                 conn.executemany("INSERT INTO order_lines(order_id, service_id, title, qty, price) VALUES (?, ?, ?, ?, ?)",
                                  [(oid, s["id"], s["title"], q, s["price"]) for s, q in lines])
                 hour = end_min // 60 + 1
+    # отказы: звонили, а взять не смогли
+    import json
+    for offset in range(-14, 1):
+        if rnd.random() < .4:
+            continue
+        veh = rnd.choice([1, 1, 2])
+        srv = by_vehicle[veh][0]
+        lines = [{"service_id": srv["id"], "title": srv["title"], "qty": 1 if srv["unit"] != "ч" else 2, "price": srv["price"]}]
+        partner = rnd.random() < .25
+        amount = sum(l["qty"] * l["price"] for l in lines)
+        conn.execute("INSERT INTO lost_orders(date, time, vehicle_id, reason_id, lines_json, amount, partner, partner_name, "
+                     "partner_income, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)",
+                     ((today + timedelta(days=offset)).isoformat(), f"{rnd.randint(8, 20):02d}:15", veh,
+                      rnd.choice([1, 1, 2, 3, 4]), json.dumps(lines, ensure_ascii=False), amount, int(partner),
+                      "Магомед" if partner else "", round(amount * .15, -1) if partner else 0))
     conn.commit()
     print("Демо-данные добавлены.")
 

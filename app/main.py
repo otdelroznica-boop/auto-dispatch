@@ -1,4 +1,5 @@
 import io
+import json
 import secrets
 from datetime import date as date_cls, timedelta
 from pathlib import Path
@@ -10,8 +11,8 @@ from fastapi.staticfiles import StaticFiles
 
 from . import telegram
 from .database import check_pin, get_connection, hash_pin, init_db, normalize_phone
-from .models import (ClientIn, DriverIn, LoginIn, OrderIn, PayIn, ServiceIn, SettingsIn, StatusIn, UserIn,
-                     VehicleIn)
+from .models import (ClientIn, DriverIn, LoginIn, LostIn, OrderIn, PayIn, ReasonIn, ServiceIn, SettingsIn, StatusIn,
+                     UserIn, VehicleIn)
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 COOKIE = "dispatch_session"
@@ -99,6 +100,7 @@ def bootstrap(user=Depends(current_user), conn=Depends(db)):
         "vehicles": rows(conn.execute("SELECT * FROM vehicles ORDER BY sort, id")),
         "drivers": rows(conn.execute("SELECT * FROM drivers ORDER BY name")),
         "services": rows(conn.execute("SELECT * FROM services ORDER BY vehicle_id IS NULL, vehicle_id, id")),
+        "reasons": rows(conn.execute("SELECT * FROM lost_reasons ORDER BY sort, id")),
         "settings": s,
     }
 
@@ -131,6 +133,66 @@ def save_driver(data: DriverIn, item_id: Optional[int] = None, user=Depends(curr
 @app.put("/api/services/{item_id}")
 def save_service(data: ServiceIn, item_id: Optional[int] = None, user=Depends(current_user), conn=Depends(db)):
     return {"id": upsert(conn, "services", item_id, data.model_dump())}
+
+
+@app.post("/api/reasons")
+@app.put("/api/reasons/{item_id}")
+def save_reason(data: ReasonIn, item_id: Optional[int] = None, user=Depends(current_user), conn=Depends(db)):
+    return {"id": upsert(conn, "lost_reasons", item_id, data.model_dump())}
+
+
+# ---------- Отказы (упущенная прибыль) ----------
+
+LOST_SQL = """
+SELECT l.*, v.name AS vehicle_name, v.color AS vehicle_color, r.title AS reason_title, u.name AS created_by_name
+FROM lost_orders l
+LEFT JOIN vehicles v ON v.id = l.vehicle_id
+LEFT JOIN lost_reasons r ON r.id = l.reason_id
+LEFT JOIN users u ON u.id = l.created_by
+"""
+
+
+def lost_row(row) -> dict:
+    item = dict(row)
+    item["lines"] = json.loads(item.pop("lines_json") or "[]")
+    return item
+
+
+def load_lost(conn, date_from: str, date_to: str) -> list[dict]:
+    return [lost_row(r) for r in conn.execute(LOST_SQL + " WHERE l.date BETWEEN ? AND ? ORDER BY l.date, l.time, l.id",
+                                              (date_from, date_to))]
+
+
+@app.get("/api/lost")
+def list_lost(date: Optional[str] = None, date_from: Optional[str] = None, date_to: Optional[str] = None,
+              user=Depends(current_user), conn=Depends(db)):
+    date_from = date_from or date or date_cls.today().isoformat()
+    return load_lost(conn, date_from, date_to or date or date_from)
+
+
+@app.post("/api/lost")
+@app.put("/api/lost/{item_id}")
+def save_lost(data: LostIn, item_id: Optional[int] = None, user=Depends(current_user), conn=Depends(db)):
+    lines = [l.model_dump() for l in data.lines if l.title.strip()]
+    payload = {
+        "date": data.date, "time": data.time, "vehicle_id": data.vehicle_id, "reason_id": data.reason_id,
+        "lines_json": json.dumps(lines, ensure_ascii=False),
+        "amount": round(sum(l["qty"] * l["price"] for l in lines), 2) if lines else data.amount,
+        "client_phone": data.client_phone, "note": data.note, "partner": int(data.partner),
+        "partner_name": data.partner_name if data.partner else "",
+        "partner_income": data.partner_income if data.partner else 0,
+    }
+    if not item_id:
+        payload["created_by"] = user["id"]
+    item_id = upsert(conn, "lost_orders", item_id, payload)
+    return lost_row(conn.execute(LOST_SQL + " WHERE l.id = ?", (item_id,)).fetchone())
+
+
+@app.delete("/api/lost/{item_id}")
+def delete_lost(item_id: int, user=Depends(current_user), conn=Depends(db)):
+    conn.execute("DELETE FROM lost_orders WHERE id = ?", (item_id,))
+    conn.commit()
+    return {"ok": True}
 
 
 # ---------- Клиенты ----------
@@ -377,7 +439,7 @@ def report(date_from: str, date_to: str, user=Depends(current_user), conn=Depend
         out: dict = {}
         for o in active:
             key = key_fn(o)
-            g = out.setdefault(key, {"name": name_fn(o), "orders": 0, "plan": 0.0, "paid": 0.0, "debt": 0.0})
+            g = out.setdefault(key, {"id": key, "name": name_fn(o), "orders": 0, "plan": 0.0, "paid": 0.0, "debt": 0.0})
             g["orders"] += 1
             g["plan"] += o["plan_amount"]
             g["paid"] += o["paid_amount"]
@@ -416,6 +478,7 @@ def report(date_from: str, date_to: str, user=Depends(current_user), conn=Depend
         "by_service": sorted(services.values(), key=lambda g: -g["amount"]),
         "by_day": [by_day.get(d) or {"date": d, "orders": 0, "plan": 0.0, "paid": 0.0} for d in days_between(date_from, date_to)],
         "debts": debts,
+        "lost": load_lost(conn, date_from, date_to),
     }
 
 
@@ -444,6 +507,37 @@ def export(date_from: str, date_to: str, user=Depends(current_user), conn=Depend
     for col, width in zip("ABCDEFGHIJKLMNOPQ", [6, 11, 7, 7, 13, 14, 22, 17, 28, 28, 40, 11, 11, 10, 12, 11, 30]):
         ws.column_dimensions[col].width = width
     ws.freeze_panes = "A2"
+
+    # Отказы
+    ws2 = wb.create_sheet("Отказы")
+    ws2.append(["Дата", "Время", "Машина", "Причина", "Услуги", "Упущено, ₽", "Передали партнёру", "Получили с передачи, ₽",
+                "Телефон", "Комментарий"])
+    for cell in ws2[1]:
+        cell.font = Font(bold=True)
+    for l in load_lost(conn, date_from, date_to):
+        ws2.append([l["date"], l["time"], l["vehicle_name"] or "", l["reason_title"] or "",
+                    "; ".join(x["title"] + (f" × {x['qty']:g}" if x["qty"] != 1 else "") for x in l["lines"]),
+                    l["amount"], l["partner_name"] or "да" if l["partner"] else "", l["partner_income"] if l["partner"] else 0,
+                    l["client_phone"], l["note"]])
+    for col, width in zip("ABCDEFGHIJ", [11, 7, 14, 24, 40, 12, 18, 14, 17, 30]):
+        ws2.column_dimensions[col].width = width
+    ws2.freeze_panes = "A2"
+
+    # Наёмные машины: сколько отдать владельцу
+    hired = {r["id"]: dict(r) for r in conn.execute("SELECT * FROM vehicles WHERE ownership = 'hired'")}
+    if hired:
+        ws3 = wb.create_sheet("Наёмные машины")
+        ws3.append(["Машина", "Владелец", "Заказов", "Взяли, ₽", "Отдаём владельцу, %", "Владельцу, ₽", "Остаётся нам, ₽"])
+        for cell in ws3[1]:
+            cell.font = Font(bold=True)
+        for vid, v in hired.items():
+            mine = [o for o in orders if o["vehicle_id"] == vid and o["status"] != "cancel"]
+            paid = sum(o["paid_amount"] for o in mine)
+            owner = round(paid * (v["owner_share"] or 0) / 100, 2)
+            ws3.append([v["name"], v["owner_name"], len(mine), paid, v["owner_share"], owner, paid - owner])
+        for col, width in zip("ABCDEFG", [16, 18, 9, 12, 18, 14, 16]):
+            ws3.column_dimensions[col].width = width
+
     wb.properties.creator = ""
     wb.properties.lastModifiedBy = ""
 

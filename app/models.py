@@ -32,6 +32,15 @@ class VehicleIn(BaseModel):
     default_driver_id: Optional[int] = None
     sort: int = 0
     active: int = 1
+    ownership: Literal["own", "hired"] = "own"
+    owner_name: str = ""
+    owner_share: float = Field(default=0, ge=0, le=100)
+
+
+class ReasonIn(BaseModel):
+    title: str = Field(min_length=1)
+    sort: int = 0
+    active: int = 1
 
 
 class ServiceIn(BaseModel):
@@ -92,3 +101,17 @@ class SettingsIn(BaseModel):
     day_end: Optional[int] = Field(default=None, ge=1, le=24)
     tg_token: Optional[str] = None
     tg_dispatch_chat: Optional[str] = None
+
+
+class LostIn(BaseModel):
+    date: str = Field(pattern=DATE)
+    time: str = ""
+    vehicle_id: Optional[int] = None
+    reason_id: Optional[int] = None
+    lines: list[OrderLineIn] = []
+    amount: float = 0
+    client_phone: str = ""
+    note: str = ""
+    partner: bool = False
+    partner_name: str = ""
+    partner_income: float = 0

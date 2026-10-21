@@ -12,7 +12,7 @@
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="static/icon-192.png">
   <link rel="apple-touch-icon" href="static/icon-180.png">
-  <link rel="stylesheet" href="static/style.css?v=4">
+  <link rel="stylesheet" href="static/style.css?v=5">
 </head>
 <body>
 
@@ -54,6 +54,7 @@
 
     <nav class="top-actions">
       <button class="btn btn-primary" id="newOrderBtn"><svg><use href="#i-plus"/></svg><span>Заказ</span></button>
+      <button class="btn btn-ghost btn-lost desk-only" data-lost-new title="Звонили, а взять заказ не смогли"><svg><use href="#i-x"/></svg><span>Отказ</span></button>
       <button class="btn btn-ghost desk-only" data-view="day"><svg><use href="#i-calendar"/></svg><span>День</span></button>
       <button class="btn btn-ghost desk-only" data-view="report"><svg><use href="#i-chart"/></svg><span>Отчёты</span></button>
       <button class="btn btn-ghost desk-only" data-view="clients"><svg><use href="#i-users"/></svg><span>Клиенты</span></button>
@@ -69,6 +70,7 @@
         <button data-mode="timeline" class="active">Шкала</button>
         <button data-mode="list">Список</button>
       </div>
+      <button class="chip chip-lost phone-only" data-lost-new>+ Отказ</button>
       <div class="day-stats" id="dayStats"></div>
     </div>
 
@@ -284,6 +286,6 @@
 </svg>
 
 <script src="static/demo-api.js"></script>
-<script src="static/app.js?v=4"></script>
+<script src="static/app.js?v=5"></script>
 </body>
 </html>

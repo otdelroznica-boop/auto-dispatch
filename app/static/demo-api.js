@@ -2,7 +2,7 @@
 /* Демо-режим для GitHub Pages: сервер заменён эмуляцией API в браузере.
    Повторяет логику app/main.py. Данные хранятся в localStorage этого устройства. */
 (function () {
-  const KEY = 'dsp_demo_db_v1';
+  const KEY = 'dsp_demo_db_v2';
   const STATUS_TEXT = { new: 'Новый', work: 'В работе', done: 'Выполнен', cancel: 'Отменён' };
   const PAY_TEXT = { cash: 'наличные', card: 'перевод', invoice: 'безнал по счёту' };
   let mem = null; // если localStorage недоступен — держим в памяти
@@ -23,13 +23,19 @@
       settings: { company_name: 'Диспетчерская (демо)', day_start: '7', day_end: '23', tg_token: '', tg_dispatch_chat: '' },
       users: [{ id: 1, name: 'Админ', pin: '1111', is_admin: 1, active: 1 }, { id: 2, name: 'Диспетчер', pin: '2222', is_admin: 0, active: 1 }],
       drivers: [{ id: 1, name: 'Алексей', phone: '+7 999 111-22-33', tg_chat_id: '', active: 1 },
-        { id: 2, name: 'Сергей', phone: '+7 999 444-55-66', tg_chat_id: '', active: 1 }],
-      vehicles: [{ id: 1, name: 'Эвакуатор', plate: '', color: '#dc2626', default_driver_id: 1, sort: 1, active: 1 },
-        { id: 2, name: 'Грузовая', plate: '', color: '#2563eb', default_driver_id: 2, sort: 2, active: 1 }],
+        { id: 2, name: 'Сергей', phone: '+7 999 444-55-66', tg_chat_id: '', active: 1 },
+        { id: 3, name: 'Рустам', phone: '+7 999 777-88-99', tg_chat_id: '', active: 1 }],
+      vehicles: [{ id: 1, name: 'Эвакуатор', plate: '', color: '#dc2626', default_driver_id: 1, sort: 1, active: 1, ownership: 'own', owner_name: '', owner_share: 0 },
+        { id: 2, name: 'Грузовая', plate: '', color: '#2563eb', default_driver_id: 2, sort: 2, active: 1, ownership: 'own', owner_name: '', owner_share: 0 },
+        { id: 3, name: 'Газель (наём)', plate: '', color: '#16a34a', default_driver_id: 3, sort: 3, active: 1, ownership: 'hired', owner_name: 'Рустам', owner_share: 70 }],
+      reasons: ['Машина занята', 'Нет свободного водителя', 'Далеко, не обслуживаем', 'Не устроила цена', 'Клиент нашёл другого', 'Другое']
+        .map((title, i) => ({ id: i + 1, title, sort: i + 1, active: 1 })),
+      lost: [],
       services: [
         [1, 'Эвакуация по городу', 3500, 'шт'], [1, 'Эвакуация за город (за км)', 50, 'км'], [1, 'Заблокированные колёса', 1000, 'шт'],
         [1, 'Внедорожник / микроавтобус', 1000, 'шт'], [1, 'Ожидание (за час)', 500, 'ч'], [2, 'Грузоперевозка по городу (за час)', 1400, 'ч'],
         [2, 'Грузчик (за час)', 600, 'ч'], [2, 'Межгород (за км)', 40, 'км'], [null, 'Ночной тариф', 1000, 'шт'],
+        [3, 'Газель по городу (за час)', 1200, 'ч'], [3, 'Грузчик (за час)', 600, 'ч'],
       ].map(([vehicle_id, title, price, unit], i) => ({ id: i + 1, vehicle_id, title, price, unit, active: 1 })),
       clients: [
         ['person', 'Андрей', '+7 (960) 777-22-11', ''], ['person', 'Сергей', '+7 (922) 777-28-19', ''],
@@ -39,7 +45,7 @@
       ].map(([kind, name, phone, inn], i) => ({ id: i + 1, kind, name, phone, phone_norm: normPhone(phone), inn, note: '', created_at: now() })),
       orders: [], lines: [],
     };
-    db.seq = { users: 2, drivers: 2, vehicles: 2, services: 9, clients: 7, orders: 0, lines: 0 };
+    db.seq = { users: 2, drivers: 3, vehicles: 3, services: 11, clients: 7, orders: 0, lines: 0, reasons: 6, lost: 0 };
 
     // детерминированный генератор, чтобы демо выглядело одинаково
     let x = 7;
@@ -49,9 +55,10 @@
       'ТЦ Триумф Молл', 'ул. Блинова, 50', 'Энгельс, пр. Строителей, 1'];
     const NOTES = ['Renault Duster, пробито 2 колеса', 'Не заводится', 'ДТП, не на ходу', 'Переезд, 2-комн. квартира',
       'Стройматериалы, 1,5 т', 'Kia Rio, заблокировано колесо', ''];
-    const byVeh = { 1: db.services.filter(s => s.vehicle_id === 1 || s.vehicle_id === null), 2: db.services.filter(s => s.vehicle_id === 2 || s.vehicle_id === null) };
+    const byVeh = {};
+    [1, 2, 3].forEach(v => { byVeh[v] = db.services.filter(s => s.vehicle_id === v || s.vehicle_id === null); });
     for (let off = -14; off <= 1; off++) {
-      for (const veh of [1, 2]) {
+      for (const veh of [1, 2, 3]) {
         let hour = 8;
         const n = Math.floor(rnd() * 4);
         for (let k = 0; k < n; k++) {
@@ -80,6 +87,23 @@
           lines.forEach(([sv, q]) => db.lines.push({ id: ++db.seq.lines, order_id: id, service_id: sv.id, title: sv.title, qty: q, price: sv.price }));
           hour = Math.floor(em / 60) + 1;
         }
+      }
+    }
+    // отказы: звонили, а машина занята / нет водителя
+    for (let off = -14; off <= 0; off++) {
+      if (rnd() < 0.35) continue;
+      const n = 1 + Math.floor(rnd() * 2);
+      for (let k = 0; k < n; k++) {
+        const veh = pick([1, 1, 2, 2, 3]);
+        const sv = byVeh[veh][0], extra = rnd() < 0.3 ? pick(byVeh[veh].slice(1)) : null;
+        const lines = [{ service_id: sv.id, title: sv.title, qty: sv.unit === 'ч' ? pick([1, 2, 3]) : 1, price: sv.price }];
+        if (extra) lines.push({ service_id: extra.id, title: extra.title, qty: extra.unit === 'км' ? pick([20, 40]) : 1, price: extra.price });
+        const partner = rnd() < 0.25;
+        const amount = lines.reduce((s, x) => s + x.qty * x.price, 0);
+        db.lost.push({ id: ++db.seq.lost, date: shift(off), time: `${String(8 + Math.floor(rnd() * 12)).padStart(2, '0')}:${pick(['05', '20', '40', '55'])}`,
+          vehicle_id: veh, reason_id: pick([1, 1, 1, 2, 2, 3, 4, 5]), lines, amount, client_phone: '', note: '',
+          partner: partner ? 1 : 0, partner_name: partner ? 'Магомед' : '', partner_income: partner ? Math.round(amount * 0.15 / 50) * 50 : 0,
+          created_by: 1, created_at: now() });
       }
     }
     return db;
@@ -188,13 +212,20 @@
     return enrich(db, db.orders.find(o => o.id === id));
   }
 
+  function enrichLost(db, l) {
+    const v = db.vehicles.find(x => x.id === l.vehicle_id), r = db.reasons.find(x => x.id === l.reason_id), u = db.users.find(x => x.id === l.created_by);
+    return { ...l, vehicle_name: v?.name ?? null, vehicle_color: v?.color ?? null, reason_title: r?.title ?? null, created_by_name: u?.name ?? null };
+  }
+  const lostBetween = (db, f, t) => db.lost.filter(l => l.date >= f && l.date <= t)
+    .sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time) || a.id - b.id).map(l => enrichLost(db, l));
+
   function report(db, f, t) {
     const orders = ordersBetween(db, f, t), active = orders.filter(o => o.status !== 'cancel');
     const group = (key, name) => {
       const out = new Map();
       active.forEach(o => {
         const k = key(o);
-        if (!out.has(k)) out.set(k, { name: name(o), orders: 0, plan: 0, paid: 0, debt: 0 });
+        if (!out.has(k)) out.set(k, { id: k, name: name(o), orders: 0, plan: 0, paid: 0, debt: 0 });
         const g = out.get(k); g.orders++; g.plan += o.plan_amount; g.paid += o.paid_amount; g.debt += debtOf(o);
       });
       return [...out.values()].sort((a, b) => b.paid - a.paid);
@@ -219,6 +250,7 @@
       by_service: [...services.values()].sort((a, b) => b.amount - a.amount),
       by_day: byDay,
       debts: active.filter(o => debtOf(o) > 0.009),
+      lost: lostBetween(db, f, t),
     };
   }
 
@@ -243,10 +275,29 @@
       if (user.is_admin) s.tg_token_set = !!s.tg_token;
       delete s.tg_token;
       return { me: user, vehicles: [...db.vehicles].sort((a, b) => a.sort - b.sort || a.id - b.id), drivers: [...db.drivers].sort((a, b) => a.name.localeCompare(b.name)),
+        reasons: [...db.reasons].sort((a, b) => a.sort - b.sort || a.id - b.id),
         services: [...db.services].sort((a, b) => (a.vehicle_id === null) - (b.vehicle_id === null) || (a.vehicle_id || 0) - (b.vehicle_id || 0) || a.id - b.id), settings: s };
     }
     if ((m = path.match(/^\/api\/(vehicles|drivers|services)(?:\/(\d+))?$/))) return done({ id: upsert(db, m[1], m[2] ? +m[2] : null, body) });
 
+    if ((m = path.match(/^\/api\/reasons(?:\/(\d+))?$/))) return done({ id: upsert(db, 'reasons', m[1] ? +m[1] : null, body) });
+    if (path === '/api/lost' && method === 'GET') {
+      const d = q.get('date') || iso(new Date());
+      return lostBetween(db, q.get('date_from') || d, q.get('date_to') || d);
+    }
+    if ((m = path.match(/^\/api\/lost(?:\/(\d+))?$/))) {
+      const id = m[1] ? +m[1] : null;
+      if (method === 'DELETE') { db.lost = db.lost.filter(l => l.id !== id); return done({ ok: true }); }
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(body.date || '')) fail(422, 'Проверьте дату');
+      const lines = (body.lines || []).filter(l => String(l.title).trim());
+      const data = { date: body.date, time: body.time || '', vehicle_id: body.vehicle_id ?? null, reason_id: body.reason_id ?? null, lines,
+        amount: lines.length ? Math.round(lines.reduce((s, l) => s + l.qty * l.price, 0) * 100) / 100 : (body.amount || 0),
+        client_phone: body.client_phone || '', note: body.note || '', partner: body.partner ? 1 : 0,
+        partner_name: body.partner ? (body.partner_name || '') : '', partner_income: body.partner ? (body.partner_income || 0) : 0 };
+      if (!id) { data.created_by = user.id; data.created_at = now(); }
+      const newId = upsert(db, 'lost', id, data);
+      return done(enrichLost(db, db.lost.find(l => l.id === newId)));
+    }
     if (path === '/api/clients' && method === 'GET') return searchClients(db, q.get('q') || '', +(q.get('limit') || 20));
     if ((m = path.match(/^\/api\/clients\/(\d+)$/)) && method === 'GET') {
       const c = db.clients.find(x => x.id === +m[1]) || fail(404, 'Клиент не найден');

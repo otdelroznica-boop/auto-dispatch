@@ -89,6 +89,32 @@ CREATE TABLE IF NOT EXISTS order_lines (
     price REAL DEFAULT 0
 );
 
+CREATE TABLE IF NOT EXISTS lost_reasons (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT NOT NULL,
+    sort INTEGER DEFAULT 0,
+    active INTEGER DEFAULT 1
+);
+
+-- Отказы (упущенная прибыль): звонили, а взять заказ не смогли
+CREATE TABLE IF NOT EXISTS lost_orders (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    date TEXT NOT NULL,               -- на какой день просили
+    time TEXT DEFAULT '',             -- когда звонили, HH:MM
+    vehicle_id INTEGER REFERENCES vehicles(id) ON DELETE SET NULL,
+    reason_id INTEGER REFERENCES lost_reasons(id) ON DELETE SET NULL,
+    lines_json TEXT DEFAULT '[]',     -- требовавшиеся услуги [{service_id,title,qty,price}]
+    amount REAL DEFAULT 0,            -- упущенная сумма
+    client_phone TEXT DEFAULT '',
+    note TEXT DEFAULT '',
+    partner INTEGER DEFAULT 0,        -- 1 = передали заказ партнёру
+    partner_name TEXT DEFAULT '',
+    partner_income REAL DEFAULT 0,    -- сколько получили за передачу
+    created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS ix_lost_date ON lost_orders(date);
+
 CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT DEFAULT ''
@@ -132,9 +158,27 @@ def normalize_phone(phone: str) -> str:
     return digits
 
 
+DEFAULT_REASONS = ["Машина занята", "Нет свободного водителя", "Далеко, не обслуживаем", "Не устроила цена",
+                   "Клиент нашёл другого", "Другое"]
+
+
+def migrate(conn):
+    """Новые поля в уже существующих базах."""
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(vehicles)")}
+    for name, ddl in [("ownership", "TEXT DEFAULT 'own'"),       # own | hired
+                      ("owner_name", "TEXT DEFAULT ''"),
+                      ("owner_share", "REAL DEFAULT 0")]:         # % от «взяли», который отдаём владельцу
+        if name not in cols:
+            conn.execute(f"ALTER TABLE vehicles ADD COLUMN {name} {ddl}")
+    if conn.execute("SELECT COUNT(*) FROM lost_reasons").fetchone()[0] == 0:
+        conn.executemany("INSERT INTO lost_reasons(title, sort) VALUES (?, ?)",
+                         [(t, i) for i, t in enumerate(DEFAULT_REASONS, 1)])
+
+
 def init_db():
     conn = get_connection()
     conn.executescript(SCHEMA)
+    migrate(conn)
     for key, value in DEFAULT_SETTINGS.items():
         conn.execute("INSERT OR IGNORE INTO settings(key, value) VALUES (?, ?)", (key, value))
 

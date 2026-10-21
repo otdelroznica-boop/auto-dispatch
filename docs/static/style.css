@@ -157,6 +157,11 @@ svg { width: 20px; height: 20px; flex: none; }
 .stat span { font-size: 11px; color: var(--text-2); text-transform: uppercase; letter-spacing: .03em; }
 .stat.ok b { color: var(--ok); }
 .stat.bad b { color: var(--danger); }
+.stat.warn b { color: var(--warn); }
+.btn-lost { color: var(--warn); border-color: var(--warn-soft); }
+.chip-lost { color: var(--warn); border-color: var(--warn); height: 34px; }
+.ocard.lost { background: var(--warn-soft); border-color: transparent; }
+.warn .btn { color: var(--warn); border-color: var(--warn); background: var(--surface); }
 
 .day-body {
   display: grid; grid-template-columns: 340px 1fr; gap: 12px; padding: 0 16px 16px;
